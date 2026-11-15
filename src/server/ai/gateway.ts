@@ -98,9 +98,9 @@ async function gemini(apiKey: string, req: CompletionRequest, model: string): Pr
 export async function callProvider(provider: Provider, apiKey: string, req: CompletionRequest, model: string): Promise<CompletionResult> {
   switch (provider) {
     case "openai":
-      return openaiCompatible("https://api.openai.com/v1", "openai", apiKey, req, model);
+      return openaiCompatible(env().OPENAI_BASE_URL.replace(/\/$/, ""), "openai", apiKey, req, model);
     case "deepseek":
-      return openaiCompatible("https://api.deepseek.com", "deepseek", apiKey, req, model);
+      return openaiCompatible(env().DEEPSEEK_BASE_URL.replace(/\/$/, ""), "deepseek", apiKey, req, model);
     case "gemini":
       return gemini(apiKey, req, model);
   }

@@ -31,6 +31,7 @@ const schema = z.object({
   META_APP_SECRET: z.string().optional(),
   META_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
   META_GRAPH_VERSION: z.string().default("v24.0"),
+  META_GRAPH_BASE_URL: z.url().default("https://graph.facebook.com"), // override only for local end-to-end testing with a mock
   META_SCOPES: z
     .string()
     .default("pages_show_list,pages_read_engagement,pages_read_user_content,pages_manage_engagement,pages_manage_metadata,pages_messaging"),
@@ -44,6 +45,8 @@ const schema = z.object({
   DEEPSEEK_API_KEY: z.string().optional(),
   DEEPSEEK_MODEL: z.string().default("deepseek-chat"),
   AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  OPENAI_BASE_URL: z.url().default("https://api.openai.com/v1"), // proxies / Azure-compatible gateways / local mocks
+  DEEPSEEK_BASE_URL: z.url().default("https://api.deepseek.com"),
 
   EMAIL_PROVIDER: z.enum(["smtp", "resend", "postmark", "disabled"]).default("smtp"),
   EMAIL_FROM: z.string().default("Page Moderator AI <no-reply@localhost>"),

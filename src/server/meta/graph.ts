@@ -34,7 +34,7 @@ export class GraphError extends Error {
 export type GraphParams = Record<string, string | number | boolean | undefined>;
 
 function base() {
-  return `https://graph.facebook.com/${env().META_GRAPH_VERSION}`;
+  return `${env().META_GRAPH_BASE_URL.replace(/\/$/, "")}/${env().META_GRAPH_VERSION}`;
 }
 
 async function request<T>(method: "GET" | "POST" | "DELETE", path: string, params: GraphParams, token?: string, body?: Record<string, unknown>): Promise<T> {

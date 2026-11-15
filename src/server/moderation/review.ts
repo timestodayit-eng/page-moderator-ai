@@ -143,6 +143,8 @@ export async function reanalyze(ctx: WorkspaceContext, commentId: string) {
   const c = await prisma.comment.findFirst({ where: { id: commentId, workspaceId: ctx.workspace.id } });
   if (!c) throw Errors.notFound("Comment");
   await prisma.$transaction(async (tx) => {
+    // Older pending decisions are superseded by the fresh analysis.
+    await tx.moderationDecision.updateMany({ where: { commentId, reviewStatus: "PENDING" }, data: { reviewStatus: "NOT_REQUIRED", reviewNote: "Superseded by re-analysis" } });
     await tx.comment.update({ where: { id: commentId }, data: { status: "NEW" } });
     await enqueueOutbox("moderation.process", { commentId }, tx);
   });

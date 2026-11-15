@@ -35,29 +35,27 @@ export async function evaluatePolicy(page: ConnectedPage, settings: PageSettings
     reasons.push(`model recommends HIDE (${cat}, conf ${c.confidence.toFixed(2)}, risk ${c.risk_score.toFixed(2)})`);
     const catCfg = settings.categories[cat];
     if (PROTECTED_CATEGORIES.includes(cat)) {
-      reasons.push("protected category — never hidden automatically");
-    } else if (page.moderationMode !== "AUTO") {
-      reasons.push(`page mode ${page.moderationMode} — queued for human approval`);
-    } else if (!page.autoHideEnabled) {
-      reasons.push("auto-hide not activated for this Page");
-    } else if (!catCfg?.autoHide) {
-      reasons.push(`auto-hide disabled for ${cat}`);
-    } else if (!g.autoHideAllowedCategories.includes(cat)) {
-      reasons.push(`platform policy does not allow auto-hiding ${cat}`);
-    } else if (c.confidence < Math.max(catCfg.threshold, g.minAutoHideConfidence)) {
-      reasons.push(`confidence ${c.confidence.toFixed(2)} below threshold ${Math.max(catCfg.threshold, g.minAutoHideConfidence)}`);
+      reasons.push("protected category — never hidden automatically; sent to review");
+      decision = "REVIEW";
     } else {
-      const hourAgo = new Date(Date.now() - 3_600_000);
-      const recentHides = await prisma.moderationAction.count({ where: { type: "HIDE", actorType: "AI", createdAt: { gte: hourAgo }, comment: { pageId: page.id } } });
-      const cap = Math.min(settings.maxAutoHidesPerHour, g.globalMaxAutoHidesPerPagePerHour);
-      if (recentHides >= cap) reasons.push(`hourly auto-hide cap reached (${recentHides}/${cap})`);
+      // The recommended action is HIDE; whether it executes automatically depends on the layered policy.
+      decision = "HIDE";
+      if (page.moderationMode !== "AUTO") reasons.push(`page mode ${page.moderationMode} — hide requires human approval`);
+      else if (!page.autoHideEnabled) reasons.push("auto-hide not activated for this Page — awaiting approval");
+      else if (!catCfg?.autoHide) reasons.push(`auto-hide disabled for ${cat} — awaiting approval`);
+      else if (!g.autoHideAllowedCategories.includes(cat)) reasons.push(`platform policy does not allow auto-hiding ${cat} — awaiting approval`);
+      else if (c.confidence < Math.max(catCfg.threshold, g.minAutoHideConfidence)) reasons.push(`confidence ${c.confidence.toFixed(2)} below threshold ${Math.max(catCfg.threshold, g.minAutoHideConfidence)} — awaiting approval`);
       else {
-        decision = "HIDE";
-        autoExecute = true;
-        reasons.push("all auto-hide conditions satisfied");
+        const hourAgo = new Date(Date.now() - 3_600_000);
+        const recentHides = await prisma.moderationAction.count({ where: { type: "HIDE", actorType: "AI", createdAt: { gte: hourAgo }, comment: { pageId: page.id } } });
+        const cap = Math.min(settings.maxAutoHidesPerHour, g.globalMaxAutoHidesPerPagePerHour);
+        if (recentHides >= cap) reasons.push(`hourly auto-hide cap reached (${recentHides}/${cap}) — awaiting approval`);
+        else {
+          autoExecute = true;
+          reasons.push("all auto-hide conditions satisfied");
+        }
       }
     }
-    if (!autoExecute) decision = "REVIEW";
   }
 
   if (c.recommended_action === "REPLY") {
@@ -76,9 +74,12 @@ export async function evaluatePolicy(page: ConnectedPage, settings: PageSettings
         autoExecute = true;
         reasons.push(`limited automatic reply allowed for ${cat}`);
       }
+    } else if (page.replyMode === "SUGGEST") {
+      decision = "KEEP";
+      reasons.push("reply suggested for staff (not queued)");
     } else {
-      decision = page.replyMode === "SUGGEST" ? "KEEP" : "REVIEW";
-      reasons.push(page.replyMode === "SUGGEST" ? "reply suggested for staff" : "reply requires human approval");
+      decision = "REPLY";
+      reasons.push(page.replyMode === "APPROVAL" ? "reply requires human approval" : "limited auto-reply conditions not met — awaiting approval");
     }
   }
   if (page.moderationMode === "SHADOW" && autoExecute) {
@@ -86,7 +87,8 @@ export async function evaluatePolicy(page: ConnectedPage, settings: PageSettings
     reasons.push("shadow mode — no changes made on Facebook");
   }
   void opts;
-  return { decision, autoExecute, reasons, reviewRequired: decision === "REVIEW" || (decision === "REPLY" && !autoExecute) };
+  const reviewRequired = decision === "REVIEW" || ((decision === "HIDE" || decision === "REPLY") && !autoExecute);
+  return { decision, autoExecute, reasons, reviewRequired };
 }
 
 /** Full pipeline for one stored comment. Idempotent: a comment that is already ANALYZED is skipped. */

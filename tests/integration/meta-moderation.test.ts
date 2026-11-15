@@ -91,9 +91,11 @@ describe("Meta integration & moderation pipeline", () => {
     const comment = await prisma.comment.findFirst({ where: { fbCommentId: "PAGE1_C1" }, include: { classifications: true, decisions: true } });
     expect(comment?.status).toBe("ANALYZED");
     expect(comment?.classifications[0].category).toBe("SPAM");
-    expect(comment?.decisions[0].decision).toBe("REVIEW");
+    expect(comment?.decisions[0].decision).toBe("HIDE"); // recommended, but NOT executed
+    expect(comment?.decisions[0].autoExecuted).toBe(false);
     expect(comment?.decisions[0].reviewStatus).toBe("PENDING");
     expect(comment?.decisions[0].reasons.join(" ")).toContain("auto-hide not activated");
+    expect(comment?.isHidden).toBe(false);
     expect(mock.graphCalls.filter((c) => c.url.includes("is_hidden"))).toHaveLength(0);
   });
 
