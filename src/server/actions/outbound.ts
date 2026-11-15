@@ -47,8 +47,8 @@ const LOCK_MS = 90_000;
  * row CLAIMED with an expired lock → reconciliation checks Meta before deciding to retry (no duplicate replies).
  */
 export async function executeAction(actionId: string, workerId = `w-${process.pid}`) {
-  const claimed = await prisma.$executeRaw`UPDATE "OutboundAction" SET "status" = 'CLAIMED', "lockedUntil" = NOW() + (${LOCK_MS} || ' milliseconds')::interval, "lockedBy" = ${workerId}, "attempts" = "attempts" + 1, "updatedAt" = NOW()
-    WHERE "id" = ${actionId} AND "status" = 'PENDING' AND "scheduledAt" <= NOW()`;
+  const claimed = await prisma.$executeRaw`UPDATE "OutboundAction" SET "status" = 'CLAIMED', "lockedUntil" = (NOW() AT TIME ZONE 'UTC') + (${LOCK_MS} || ' milliseconds')::interval, "lockedBy" = ${workerId}, "attempts" = "attempts" + 1, "updatedAt" = (NOW() AT TIME ZONE 'UTC')
+    WHERE "id" = ${actionId} AND "status" = 'PENDING' AND "scheduledAt" <= (NOW() AT TIME ZONE 'UTC')`;
   if (claimed === 0) return { skipped: true as const };
   const action = await prisma.outboundAction.findUniqueOrThrow({ where: { id: actionId } });
   const actorType = action.createdById ? "USER" : "AI";

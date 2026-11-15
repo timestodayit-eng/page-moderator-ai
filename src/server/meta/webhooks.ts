@@ -47,7 +47,7 @@ export async function ingestWebhook(payload: MetaPayload, signatureValid: boolea
       const page = await prisma.connectedPage.findFirst({ where: { fbPageId: entry.id, status: { not: "DISCONNECTED" } }, select: { id: true, workspaceId: true } });
       try {
         await prisma.$transaction(async (tx) => {
-          const ev = await tx.webhookEvent.create({ data: { source: "meta", dedupeKey: u.key, signatureValid, payload: u.data as object, status: signatureValid && page ? "QUEUED" : "IGNORED", workspaceId: page?.workspaceId ?? null, lastError: !signatureValid ? "invalid signature" : !page ? "page not connected" : null } });
+          const ev = await tx.webhookEvent.create({ data: { source: "meta", dedupeKey: signatureValid ? u.key : `${u.key}:unsigned:${sha256(JSON.stringify(u.data)).slice(0, 8)}`, signatureValid, payload: u.data as object, status: signatureValid && page ? "QUEUED" : "IGNORED", workspaceId: page?.workspaceId ?? null, lastError: !signatureValid ? "invalid signature" : !page ? "page not connected" : null } });
           if (signatureValid && page) await enqueueOutbox("meta.event", { eventId: ev.id }, tx);
           stored.push(ev.id);
         });

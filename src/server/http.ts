@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { ZodError, type ZodType } from "zod";
 import type { User } from "@/generated/prisma/client";
 import { AppError, Errors } from "./errors";
+import { AiError } from "./ai/gateway";
 import { env } from "./env";
 import { log } from "./log";
 import { rateLimit } from "./ratelimit";
@@ -57,6 +58,10 @@ export function errorResponse(err: unknown) {
     const res = NextResponse.json({ error: { code: err.code, message: err.message, details: err.details ?? null } }, { status: err.status });
     if (err.code === "RATE_LIMITED") res.headers.set("Retry-After", String((err.details as { retryAfter: number }).retryAfter));
     return res;
+  }
+  if (err instanceof AiError) {
+    const status = err.code === "NOT_CONFIGURED" || err.code === "PROVIDER" || err.code === "TIMEOUT" ? 503 : err.code === "BUDGET" || err.code === "INACTIVE" ? 402 : err.code === "RATE_LIMIT" ? 429 : 502;
+    return NextResponse.json({ error: { code: `AI_${err.code}`, message: err.message } }, { status });
   }
   if (err instanceof ZodError) {
     return NextResponse.json(

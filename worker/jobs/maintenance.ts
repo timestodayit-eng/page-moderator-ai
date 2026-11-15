@@ -68,7 +68,7 @@ async function replayFailedWebhooks() {
   const events = await prisma.webhookEvent.findMany({ where: { status: "FAILED", attempts: { lt: 10 }, receivedAt: { lt: new Date(Date.now() - 120_000) } }, take: 200, select: { id: true } });
   for (const ev of events) {
     await prisma.webhookEvent.update({ where: { id: ev.id }, data: { status: "QUEUED" } });
-    await queue("meta-events").add("meta.event", { eventId: ev.id }, { jobId: `evt:${ev.id}:${Date.now()}` });
+    await queue("meta-events").add("meta.event", { eventId: ev.id }, { jobId: `evt-${ev.id}-${Date.now()}` });
   }
   return { replayed: events.length };
 }

@@ -10,12 +10,12 @@ export async function dispatchOutbox(batch = 100) {
   const rows = await prisma.$queryRaw<{ id: string; topic: string; payload: Record<string, unknown>; attempts: number }[]>`
     UPDATE "WebhookOutbox" SET "attempts" = "attempts" + 1
     WHERE "id" IN (
-      SELECT "id" FROM "WebhookOutbox" WHERE "status" = 'PENDING' AND "availableAt" <= NOW() ORDER BY "createdAt" LIMIT ${batch} FOR UPDATE SKIP LOCKED
+      SELECT "id" FROM "WebhookOutbox" WHERE "status" = 'PENDING' AND "availableAt" <= (NOW() AT TIME ZONE 'UTC') ORDER BY "createdAt" LIMIT ${batch} FOR UPDATE SKIP LOCKED
     ) RETURNING "id", "topic", "payload", "attempts"`;
   let ok = 0;
   for (const row of rows) {
     try {
-      await enqueueDirect(row.topic, { ...row.payload, outboxId: row.id }, { jobId: `ob:${row.id}` });
+      await enqueueDirect(row.topic, { ...row.payload, outboxId: row.id }, { jobId: `ob-${row.id}` });
       await prisma.webhookOutbox.update({ where: { id: row.id }, data: { status: "DISPATCHED", dispatchedAt: new Date() } });
       ok++;
     } catch (err) {

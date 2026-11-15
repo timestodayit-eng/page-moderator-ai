@@ -110,7 +110,7 @@ export async function sendReply(ctx: WorkspaceContext, id: string, input: { text
   if (!withinWindow && !input.tag) throw Errors.conflict("The 24-hour messaging window has closed. A message tag is required (e.g. HUMAN_AGENT within 7 days) per Meta policy.");
   if (!conv.lastInboundAt) throw Errors.forbidden("Cannot start an unsolicited Messenger conversation");
 
-  const locked = await prisma.$executeRaw`UPDATE "Conversation" SET "replyLockById" = ${ctx.user.id}, "replyLockUntil" = NOW() + (${REPLY_LOCK_MS} || ' milliseconds')::interval WHERE "id" = ${id} AND ("replyLockUntil" IS NULL OR "replyLockUntil" < NOW() OR "replyLockById" = ${ctx.user.id})`;
+  const locked = await prisma.$executeRaw`UPDATE "Conversation" SET "replyLockById" = ${ctx.user.id}, "replyLockUntil" = (NOW() AT TIME ZONE 'UTC') + (${REPLY_LOCK_MS} || ' milliseconds')::interval WHERE "id" = ${id} AND ("replyLockUntil" IS NULL OR "replyLockUntil" < (NOW() AT TIME ZONE 'UTC') OR "replyLockById" = ${ctx.user.id})`;
   if (locked === 0) throw Errors.conflict("Another team member is replying to this conversation right now");
   try {
     return await prisma.$transaction(async (tx) => {

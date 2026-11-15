@@ -38,8 +38,23 @@ function tokens(q: string) {
   return [...new Set(q.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((t) => t.length > 2))].slice(0, 24);
 }
 
+const SMALL_CORPUS_CHUNKS = 12;
+
+/**
+ * Retrieval strategy:
+ *  - small corpora (≤ 12 chunks, typical for a single business) are returned whole, which makes cross-language
+ *    questions (Bengali question, English knowledge) work without embeddings;
+ *  - larger corpora use Postgres full-text search with a keyword-overlap fallback.
+ */
 export async function retrieveKnowledge(workspaceId: string, query: string, opts: { sourceIds?: string[]; limit?: number } = {}) {
   const limit = opts.limit ?? 5;
+  const scopeWhere = { workspaceId, source: { status: "READY" }, ...(opts.sourceIds?.length ? { sourceId: { in: opts.sourceIds } } : {}) };
+  const total = await prisma.knowledgeChunk.count({ where: scopeWhere });
+  if (total === 0) return [] as { id: string; content: string; sourceId: string; score: number }[];
+  if (total <= SMALL_CORPUS_CHUNKS) {
+    const all = await prisma.knowledgeChunk.findMany({ where: scopeWhere, orderBy: [{ sourceId: "asc" }, { ordinal: "asc" }], select: { id: true, content: true, sourceId: true } });
+    return all.map((c) => ({ ...c, score: 1 }));
+  }
   const toks = tokens(query);
   if (!toks.length) return [] as { id: string; content: string; sourceId: string; score: number }[];
   try {

@@ -50,10 +50,11 @@ export async function sessionFor(userId: string) {
   return token;
 }
 
-type Handler = (req: NextRequest, ctx: { params: Promise<Record<string, string>> }) => Promise<Response>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Handler = (req: NextRequest, ctx: any) => Promise<Response>;
 
 /** Invoke a Next.js route handler directly with a synthetic request. */
-export async function call(handler: Handler, opts: { method?: string; url?: string; body?: unknown; token?: string; workspace?: string; params?: Record<string, string>; headers?: Record<string, string> } = {}) {
+export async function call(handler: Handler, opts: { method?: string; url?: string; body?: unknown; rawBody?: string; token?: string; workspace?: string; params?: Record<string, string>; headers?: Record<string, string> } = {}) {
   const url = new URL(opts.url ?? "/api/test", "http://localhost:3000");
   const headers = new Headers({ origin: "http://localhost:3000", ...(opts.headers ?? {}) });
   const cookies: string[] = [];
@@ -61,7 +62,8 @@ export async function call(handler: Handler, opts: { method?: string; url?: stri
   if (opts.workspace) headers.set("x-workspace-id", opts.workspace);
   if (cookies.length) headers.set("cookie", cookies.join("; "));
   let body: string | undefined;
-  if (opts.body !== undefined) {
+  if (opts.rawBody !== undefined) body = opts.rawBody;
+  else if (opts.body !== undefined) {
     headers.set("content-type", "application/json");
     body = JSON.stringify(opts.body);
   }
