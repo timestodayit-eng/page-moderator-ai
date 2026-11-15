@@ -1,0 +1,103 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource/hind-siliguri/400.css";
+@import "@fontsource/hind-siliguri/500.css";
+@import "@fontsource/hind-siliguri/600.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ─── Design tokens (OxygenOS-inspired) ─── */
+:root {
+  --bg: #f7f9fc;
+  --surface: #ffffff;
+  --surface-2: #f1f4f9;
+  --text: #172033;
+  --text-2: #6b7280;
+  --text-3: #9ca3af;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-soft: #e8efff;
+  --success: #16a34a;
+  --success-soft: #e7f7ec;
+  --warning: #f59e0b;
+  --warning-soft: #fff4e0;
+  --danger: #dc2626;
+  --danger-soft: #fdeaea;
+  --border: #e5eaf1;
+  --border-strong: #d4dbe6;
+  --ring: rgba(37, 99, 235, 0.25);
+  --shadow-sm: 0 1px 2px rgba(23, 32, 51, 0.04), 0 1px 3px rgba(23, 32, 51, 0.06);
+  --shadow-md: 0 4px 14px rgba(23, 32, 51, 0.06), 0 1px 3px rgba(23, 32, 51, 0.04);
+  --shadow-lg: 0 16px 40px rgba(23, 32, 51, 0.12);
+  --radius: 16px;
+  --radius-sm: 10px;
+  --radius-xs: 8px;
+}
+.dark {
+  --bg: #0d1220;
+  --surface: #141a2a;
+  --surface-2: #1b2234;
+  --text: #e9edf5;
+  --text-2: #a0a9ba;
+  --text-3: #6f7889;
+  --primary: #4f83ff;
+  --primary-hover: #6b97ff;
+  --primary-soft: rgba(79, 131, 255, 0.14);
+  --success: #34c26a;
+  --success-soft: rgba(52, 194, 106, 0.14);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.14);
+  --danger: #f05252;
+  --danger-soft: rgba(240, 82, 82, 0.14);
+  --border: #222b3d;
+  --border-strong: #2f3a50;
+  --ring: rgba(79, 131, 255, 0.35);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-soft: var(--primary-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --radius-card: var(--radius);
+  --radius-sm: var(--radius-sm);
+  --radius-xs: var(--radius-xs);
+  --shadow-card: var(--shadow-md);
+  --shadow-soft: var(--shadow-sm);
+  --shadow-pop: var(--shadow-lg);
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-bengali: "Hind Siliguri", "Inter Variable", sans-serif;
+}
+
+html { color-scheme: light; }
+html.dark { color-scheme: dark; }
+body { background: var(--bg); color: var(--text); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; letter-spacing: -0.005em; }
+:lang(bn), .font-bengali { font-family: var(--font-bengali); letter-spacing: 0; }
+
+* { border-color: var(--border); }
+*:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 6px; }
+::selection { background: var(--primary-soft); }
+
+@keyframes fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.animate-fade-up { animation: fade-up 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.skeleton { background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 50%, var(--surface-2) 75%); background-size: 800px 100%; animation: shimmer 1.4s infinite linear; border-radius: 8px; }
+.scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

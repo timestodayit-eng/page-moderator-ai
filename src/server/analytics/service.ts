@@ -24,10 +24,10 @@ export async function workspaceAnalytics(workspaceId: string, days: number) {
     prisma.$queryRaw<{ day: Date; comments: number; conversations: number; leads: number; ai_requests: number }[]>`
       WITH d AS (SELECT generate_series(date_trunc('day', ${since}::timestamp), date_trunc('day', (NOW() AT TIME ZONE 'UTC')), '1 day') AS day)
       SELECT d.day,
-        (SELECT COUNT(*)::int FROM "Comment" WHERE "workspaceId"=${workspaceId} AND date_trunc('day',"receivedAt")=d.day) comments,
-        (SELECT COUNT(*)::int FROM "Conversation" WHERE "workspaceId"=${workspaceId} AND date_trunc('day',"createdAt")=d.day) conversations,
-        (SELECT COUNT(*)::int FROM "Lead" WHERE "workspaceId"=${workspaceId} AND date_trunc('day',"createdAt")=d.day) leads,
-        (SELECT COUNT(*)::int FROM "AiUsage" WHERE "workspaceId"=${workspaceId} AND date_trunc('day',"createdAt")=d.day) ai_requests
+        (SELECT COUNT(*)::int FROM "Comment" WHERE "workspaceId"=${workspaceId} AND date_trunc('day',"receivedAt")=d.day) AS comments,
+        (SELECT COUNT(*)::int FROM "Conversation" WHERE "workspaceId"=${workspaceId} AND date_trunc('day',"createdAt")=d.day) AS conversations,
+        (SELECT COUNT(*)::int FROM "Lead" WHERE "workspaceId"=${workspaceId} AND date_trunc('day',"createdAt")=d.day) AS leads,
+        (SELECT COUNT(*)::int FROM "AiUsage" WHERE "workspaceId"=${workspaceId} AND date_trunc('day',"createdAt")=d.day) AS ai_requests
       FROM d ORDER BY d.day`,
   ]);
   const userIds = [...new Set([...byAgentConv.map((a) => a.assignedToId), ...leadsByAssignee.map((a) => a.assignedToId)].filter(Boolean))] as string[];

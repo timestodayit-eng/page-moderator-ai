@@ -14,6 +14,9 @@ const bool = z
 
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  // Deployment stage for strictness checks. `next start` forces NODE_ENV=production, so local smoke
+  // tests of the production build can set APP_STAGE=local to relax https/placeholder enforcement.
+  APP_STAGE: z.enum(["local", "staging", "production"]).optional(),
   APP_URL: z.url(),
   APP_NAME: z.string().default("Page Moderator AI"),
   DATABASE_URL: z.string().min(1),
@@ -79,7 +82,8 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): { env?: En
   const key = Buffer.from(env.ENCRYPTION_KEY, "base64");
   if (key.length !== 32) errors.push("ENCRYPTION_KEY must decode (base64) to exactly 32 bytes. Generate: openssl rand -base64 32");
 
-  if (env.NODE_ENV === "production") {
+  const stage = env.APP_STAGE ?? (env.NODE_ENV === "production" ? "production" : "local");
+  if (stage === "production" || stage === "staging") {
     const secrets: [string, string | undefined][] = [
       ["ENCRYPTION_KEY", env.ENCRYPTION_KEY],
       ["META_APP_SECRET", env.META_APP_SECRET],
@@ -92,7 +96,7 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): { env?: En
     }
     if (env.META_WEBHOOK_VERIFY_TOKEN && env.META_WEBHOOK_VERIFY_TOKEN.length < 16)
       errors.push("META_WEBHOOK_VERIFY_TOKEN must be at least 16 characters");
-    if (!env.APP_URL.startsWith("https://")) errors.push("APP_URL must use https:// in production");
+    if (stage === "production" && !env.APP_URL.startsWith("https://")) errors.push("APP_URL must use https:// in production");
     if (/postgres:postgres@/.test(env.DATABASE_URL)) errors.push("DATABASE_URL uses default postgres credentials");
   }
   return { env, errors };
