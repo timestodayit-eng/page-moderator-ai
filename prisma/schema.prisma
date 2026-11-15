@@ -1,0 +1,1108 @@
+// Page Moderator AI — Enterprise SaaS Studio
+// PostgreSQL schema. Every tenant-owned table carries `workspaceId` with a foreign key
+// to Workspace and composite indexes that start with workspaceId. Service code must always
+// filter by workspaceId (see src/server/tenancy.ts) — tests in tests/integration/tenant-*.test.ts
+// verify this.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+  runtime  = "nodejs"
+  moduleFormat = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension = ""
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────────── Identity & sessions ─────────────────────────────
+
+enum PlatformRole {
+  NONE
+  SUPPORT
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+model User {
+  id               String       @id @default(cuid())
+  email            String       @unique // always stored lower-cased
+  name             String
+  passwordHash     String
+  emailVerifiedAt  DateTime?
+  platformRole     PlatformRole @default(NONE)
+  status           UserStatus   @default(ACTIVE)
+  locale           String       @default("en")
+  mfaEnabled       Boolean      @default(false)
+  mfaSecretEnc     String?
+  failedLoginCount Int          @default(0)
+  lockedUntil      DateTime?
+  lastLoginAt      DateTime?
+  passwordChangedAt DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  sessions            Session[]
+  passwordResetTokens PasswordResetToken[]
+  emailTokens         EmailVerificationToken[]
+  memberships         Membership[]
+  notifications       Notification[]
+  invitationsSent     Invitation[]         @relation("InvitedBy")
+  assignedLeads       Lead[]               @relation("LeadAssignee")
+  assignedConversations Conversation[]     @relation("ConversationAssignee")
+  followUpTasks       FollowUpTask[]
+}
+
+model Session {
+  id           String    @id @default(cuid())
+  userId       String
+  tokenHash    String    @unique
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime  @default(now())
+  lastSeenAt   DateTime  @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  revokeReason String?
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+}
+
+model PasswordResetToken {
+  id          String    @id @default(cuid())
+  userId      String
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+  requestedIp String?
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ───────────────────────────── Tenancy & RBAC ─────────────────────────────
+
+enum WorkspaceType {
+  INTERNAL
+  CUSTOMER
+}
+
+enum WorkspaceStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum AiCredentialMode {
+  PLATFORM
+  BYOK
+}
+
+model Workspace {
+  id                    String           @id @default(cuid())
+  slug                  String           @unique
+  name                  String
+  type                  WorkspaceType    @default(CUSTOMER)
+  status                WorkspaceStatus  @default(ACTIVE)
+  billingExempt         Boolean          @default(false)
+  timezone              String           @default("Asia/Dhaka")
+  defaultLocale         String           @default("en")
+  businessProfile       Json             @default("{}")
+  aiCredentialMode      AiCredentialMode @default(PLATFORM)
+  aiProvider            String?          // overrides platform default provider
+  allowPlatformFallback Boolean          @default(false) // BYOK failure never silently falls back unless true
+  emergencyPause        Boolean          @default(false) // stops ALL automated Meta actions for the workspace
+  servicesEnabled       Json             @default("{\"moderation\":true,\"replies\":true,\"inbox\":true,\"crm\":true}")
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  memberships      Membership[]
+  roles            Role[]
+  invitations      Invitation[]
+  pages            ConnectedPage[]
+  agents           Agent[]
+  knowledgeSources KnowledgeSource[]
+  trainingExamples TrainingExample[]
+  comments         Comment[]
+  conversations    Conversation[]
+  contacts         Contact[]
+  leads            Lead[]
+  subscription     Subscription?
+  invoices         Invoice[]
+  usageEvents      UsageEvent[]
+  aiCredentials    AiCredential[]
+  auditLogs        AuditLog[]
+  savedReplies     SavedReply[]
+  supportGrants    SupportAccessGrant[]
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  workspaceId String?          // null = system role template (applies to every workspace)
+  key         String
+  name        String
+  description String           @default("")
+  isSystem    Boolean          @default(false)
+  rank        Int              @default(10) // higher = more privileged; used to prevent privilege escalation
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  workspace   Workspace?       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  permissions RolePermission[]
+  memberships Membership[]
+  invitations Invitation[]
+
+  @@unique([workspaceId, key])
+}
+
+model Permission {
+  key         String           @id
+  group       String
+  description String
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  roleId        String
+  permissionKey String
+  role          Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission    Permission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
+
+  @@id([roleId, permissionKey])
+}
+
+enum MembershipStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+model Membership {
+  id          String           @id @default(cuid())
+  userId      String
+  workspaceId String
+  roleId      String
+  status      MembershipStatus @default(ACTIVE)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  role        Role             @relation(fields: [roleId], references: [id])
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+}
+
+model Invitation {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  email          String
+  roleId         String
+  tokenHash      String    @unique
+  invitedById    String
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  acceptedUserId String?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  role           Role      @relation(fields: [roleId], references: [id])
+  invitedBy      User      @relation("InvitedBy", fields: [invitedById], references: [id])
+
+  @@index([workspaceId, email])
+}
+
+model SupportAccessGrant {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  requestedById String
+  reason        String
+  scope         String    @default("inbox:read")
+  status        String    @default("REQUESTED") // REQUESTED | APPROVED | DENIED | REVOKED
+  approvedById  String?
+  approvedAt    DateTime?
+  expiresAt     DateTime?
+  createdAt     DateTime  @default(now())
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+}
+
+model PlatformSetting {
+  key         String   @id
+  value       Json
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+// ───────────────────────────── Meta / Facebook ─────────────────────────────
+
+model OAuthState {
+  id          String    @id @default(cuid())
+  stateHash   String    @unique
+  provider    String    @default("meta")
+  userId      String
+  workspaceId String
+  payloadEnc  String?   // encrypted list of discovered Pages awaiting selection
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+}
+
+enum PageStatus {
+  CONNECTED
+  TOKEN_INVALID
+  PERMISSION_MISSING
+  DISCONNECTED
+}
+
+enum ModerationMode {
+  SHADOW
+  APPROVAL
+  AUTO
+}
+
+enum ReplyMode {
+  OFF
+  SUGGEST
+  APPROVAL
+  LIMITED_AUTO
+}
+
+model ConnectedPage {
+  id                String         @id @default(cuid())
+  workspaceId       String
+  fbPageId          String
+  name              String
+  category          String?
+  pictureUrl        String?
+  status            PageStatus     @default(CONNECTED)
+  grantedScopes     String[]
+  missingScopes     String[]
+  webhookSubscribed Boolean        @default(false)
+  webhookFields     String[]
+  lastHealthCheckAt DateTime?
+  healthError       String?
+  connectedById     String?
+  connectedAt       DateTime       @default(now())
+  disconnectedAt    DateTime?
+  disconnectedById  String?
+  moderationMode    ModerationMode @default(SHADOW)
+  autoHideEnabled   Boolean        @default(false) // must be explicitly enabled by a Page admin
+  autoHideEnabledById String?
+  autoHideEnabledAt DateTime?
+  killSwitch        Boolean        @default(false)
+  replyMode         ReplyMode      @default(SUGGEST)
+  moderationAgentId String?
+  replyAgentId      String?
+  messengerAgentId  String?
+  settings          Json           @default("{}") // per-category thresholds, rate limits — validated by zod
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  workspace         Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  credential        MetaCredential?
+  comments          Comment[]
+  conversations     Conversation[]
+
+  @@unique([workspaceId, fbPageId])
+  @@index([fbPageId])
+}
+
+model MetaCredential {
+  id          String        @id @default(cuid())
+  workspaceId String
+  pageId      String        @unique
+  tokenEnc    String        // AES-256-GCM encrypted Page access token
+  metaUserId  String?
+  scopes      String[]
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  page        ConnectedPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+enum WebhookStatus {
+  RECEIVED
+  QUEUED
+  PROCESSING
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+model WebhookEvent {
+  id             String        @id @default(cuid())
+  source         String        // meta | billing:stripe | ...
+  dedupeKey      String        @unique
+  signatureValid Boolean
+  payload        Json
+  status         WebhookStatus @default(RECEIVED)
+  attempts       Int           @default(0)
+  lastError      String?
+  workspaceId    String?
+  receivedAt     DateTime      @default(now())
+  processedAt    DateTime?
+
+  @@index([status, receivedAt])
+}
+
+// Transactional outbox: rows are written in the same DB transaction as the business change,
+// then a dispatcher in the worker pushes them onto BullMQ. Survives Redis outages and restarts.
+model WebhookOutbox {
+  id           String    @id @default(cuid())
+  topic        String
+  payload      Json
+  status       String    @default("PENDING") // PENDING | DISPATCHED | FAILED
+  attempts     Int       @default(0)
+  availableAt  DateTime  @default(now())
+  dispatchedAt DateTime?
+  lastError    String?
+  createdAt    DateTime  @default(now())
+
+  @@index([status, availableAt])
+}
+
+// ───────────────────────────── AI agents & training ─────────────────────────────
+
+enum AgentPurpose {
+  MODERATION
+  PUBLIC_REPLY
+  SUPPORT
+  SALES
+  LEAD_QUALIFICATION
+  COMPLAINT
+  MESSENGER
+}
+
+enum AgentStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model Agent {
+  id              String         @id @default(cuid())
+  workspaceId     String
+  name            String
+  description     String         @default("")
+  purpose         AgentPurpose
+  status          AgentStatus    @default(DRAFT)
+  pageId          String?        // optional: scope agent to one Page
+  activeVersionId String?
+  createdById     String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  workspace       Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  versions        AgentVersion[]
+  evaluations     AgentEvaluation[]
+
+  @@index([workspaceId, purpose])
+}
+
+model AgentVersion {
+  id                  String   @id @default(cuid())
+  agentId             String
+  workspaceId         String
+  version             Int
+  instructions        String
+  languages           String[]
+  tone                String   @default("professional")
+  provider            String   // openai | gemini | deepseek
+  model               String
+  temperature         Float    @default(0.2)
+  safetyRules         String   @default("")
+  allowedActions      String[]
+  escalationRules     String   @default("")
+  responseConstraints String   @default("")
+  knowledgeSourceIds  String[]
+  changeNote          String   @default("")
+  createdById         String?
+  createdAt           DateTime @default(now())
+  agent               Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, version])
+  @@index([workspaceId])
+}
+
+model KnowledgeSource {
+  id          String           @id @default(cuid())
+  workspaceId String
+  agentId     String?
+  title       String
+  kind        String           // company | services | policy | faq | approved_reply | product | pricing | terms | pdf | text | csv
+  status      String           @default("PROCESSING") // PROCESSING | READY | FAILED
+  storageKey  String?
+  mimeType    String?
+  sizeBytes   Int              @default(0)
+  error       String?
+  createdById String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  chunks      KnowledgeChunk[]
+
+  @@index([workspaceId])
+}
+
+model KnowledgeChunk {
+  id          String          @id @default(cuid())
+  workspaceId String
+  sourceId    String
+  ordinal     Int
+  content     String
+  source      KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, sourceId])
+}
+
+model TrainingExample {
+  id               String    @id @default(cuid())
+  workspaceId      String
+  agentId          String?
+  kind             String    @default("MODERATION") // MODERATION | REPLY
+  text             String
+  language         String    @default("bn")
+  category         String?
+  expectedDecision String?   // HIDE | REVIEW | KEEP | REPLY
+  expectedReply    String?
+  explanation      String    @default("")
+  confidenceTarget Float?
+  reviewerFeedback String    @default("")
+  source           String    @default("MANUAL") // MANUAL | FEEDBACK | IMPORT
+  status           String    @default("ACTIVE")
+  createdById      String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, kind, status])
+}
+
+model AgentEvaluation {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  agentId        String
+  agentVersionId String
+  status         String    @default("QUEUED") // QUEUED | RUNNING | COMPLETED | FAILED
+  total          Int       @default(0)
+  correct        Int       @default(0)
+  metrics        Json      @default("{}")
+  details        Json      @default("[]")
+  error          String?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  agent          Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, agentId])
+}
+
+// ───────────────────────────── Moderation ─────────────────────────────
+
+model Comment {
+  id              String                  @id @default(cuid())
+  workspaceId     String
+  pageId          String
+  fbCommentId     String
+  fbPostId        String?
+  fbParentId      String?
+  authorFbId      String?
+  authorName      String?
+  message         String
+  permalink       String?
+  createdTime     DateTime
+  isHidden        Boolean                 @default(false)
+  status          String                  @default("NEW") // NEW | ANALYZING | ANALYZED | FAILED | SKIPPED
+  lastError       String?
+  receivedAt      DateTime                @default(now())
+  workspace       Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  page            ConnectedPage           @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  classifications CommentClassification[]
+  decisions       ModerationDecision[]
+  actions         ModerationAction[]
+
+  @@unique([pageId, fbCommentId])
+  @@index([workspaceId, receivedAt])
+  @@index([workspaceId, status])
+  @@index([pageId, authorFbId, createdTime])
+}
+
+model CommentClassification {
+  id                String   @id @default(cuid())
+  workspaceId       String
+  commentId         String
+  language          String
+  category          String
+  sentiment         String
+  reasoning         String
+  confidence        Float
+  riskScore         Float
+  recommendedAction String
+  suggestedReply    String?
+  signals           Json     @default("{}")
+  provider          String
+  model             String
+  agentVersionId    String?
+  policyVersion     String
+  latencyMs         Int
+  tokensIn          Int      @default(0)
+  tokensOut         Int      @default(0)
+  costMicroUsd      BigInt   @default(0)
+  createdAt         DateTime @default(now())
+  comment           Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, category])
+  @@index([commentId])
+}
+
+model ModerationDecision {
+  id                String    @id @default(cuid())
+  workspaceId       String
+  commentId         String
+  classificationId  String?
+  mode              ModerationMode
+  decision          String    // HIDE | REVIEW | KEEP | REPLY
+  reasons           String[]
+  autoExecuted      Boolean   @default(false)
+  reviewStatus      String    @default("NOT_REQUIRED") // PENDING | APPROVED | REJECTED | NOT_REQUIRED
+  reviewedById      String?
+  reviewedAt        DateTime?
+  reviewNote        String?
+  feedback          String?   // CORRECT | FALSE_POSITIVE | FALSE_NEGATIVE | WRONG_CATEGORY
+  correctedCategory String?
+  createdAt         DateTime  @default(now())
+  comment           Comment   @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, reviewStatus])
+  @@index([commentId])
+}
+
+model ModerationAction {
+  id               String   @id @default(cuid())
+  workspaceId      String
+  commentId        String
+  type             String   // HIDE | UNHIDE | REPLY
+  actorType        String   // AI | USER
+  actorUserId      String?
+  decisionId       String?
+  outboundActionId String?
+  status           String   @default("REQUESTED")
+  note             String?
+  createdAt        DateTime @default(now())
+  comment          Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([commentId])
+}
+
+enum OutboundStatus {
+  PENDING
+  CLAIMED
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  NEEDS_RECONCILIATION
+}
+
+// Every external side effect (hide/unhide/reply/send message) goes through one row here.
+// `idempotencyKey` is unique, and workers claim rows with a conditional UPDATE so two workers can
+// never execute the same action. A crashed reply is reconciled against Meta before any retry.
+model OutboundAction {
+  id             String         @id @default(cuid())
+  workspaceId    String
+  pageId         String?
+  type           String         // HIDE_COMMENT | UNHIDE_COMMENT | REPLY_COMMENT | SEND_MESSAGE
+  targetId       String         // fb comment id / conversation id
+  payload        Json           @default("{}")
+  idempotencyKey String         @unique
+  status         OutboundStatus @default(PENDING)
+  attempts       Int            @default(0)
+  maxAttempts    Int            @default(5)
+  lockedUntil    DateTime?
+  lockedBy       String?
+  lastError      String?
+  externalId     String?
+  scheduledAt    DateTime       @default(now())
+  completedAt    DateTime?
+  createdById    String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([status, scheduledAt])
+  @@index([workspaceId, createdAt])
+  @@index([pageId, status])
+}
+
+// ───────────────────────────── Messenger ─────────────────────────────
+
+enum ConversationStatus {
+  NEW
+  OPEN
+  ASSIGNED
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+model Conversation {
+  id               String             @id @default(cuid())
+  workspaceId      String
+  pageId           String
+  contactId        String
+  psid             String
+  status           ConversationStatus @default(NEW)
+  priority         String             @default("NORMAL") // LOW | NORMAL | HIGH | URGENT
+  assignedToId     String?
+  tags             String[]
+  unreadCount      Int                @default(0)
+  lastMessageAt    DateTime           @default(now())
+  lastInboundAt    DateTime?
+  lastPreview      String?
+  aiMode           String             @default("SUGGEST") // OFF | SUGGEST | AUTO
+  humanTakeoverAt  DateTime?
+  humanTakeoverById String?
+  replyLockById    String?
+  replyLockUntil   DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  workspace        Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  page             ConnectedPage      @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  contact          Contact            @relation(fields: [contactId], references: [id])
+  assignedTo       User?              @relation("ConversationAssignee", fields: [assignedToId], references: [id])
+  messages         Message[]
+  notes            ConversationNote[]
+
+  @@unique([pageId, psid])
+  @@index([workspaceId, status, lastMessageAt])
+}
+
+model Message {
+  id               String       @id @default(cuid())
+  workspaceId      String
+  conversationId   String
+  direction        String       // IN | OUT
+  fbMessageId      String?      @unique
+  text             String       @default("")
+  attachments      Json         @default("[]")
+  senderType       String       // CUSTOMER | AGENT | AI | SYSTEM
+  sentById         String?
+  status           String       @default("RECEIVED") // RECEIVED | QUEUED | SENT | FAILED
+  outboundActionId String?
+  error            String?
+  createdAt        DateTime     @default(now())
+  sentAt           DateTime?
+  conversation     Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+model ConversationNote {
+  id             String       @id @default(cuid())
+  workspaceId    String
+  conversationId String
+  authorId       String
+  body           String
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+}
+
+model SavedReply {
+  id          String    @id @default(cuid())
+  workspaceId String
+  title       String
+  body        String
+  shortcut    String?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+// ───────────────────────────── CRM ─────────────────────────────
+
+model Contact {
+  id            String         @id @default(cuid())
+  workspaceId   String
+  name          String
+  fbPsid        String?
+  fbUserId      String?
+  phone         String?
+  email         String?
+  tags          String[]
+  notes         String?
+  source        String         @default("MANUAL")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  leads         Lead[]
+  conversations Conversation[]
+
+  @@unique([workspaceId, fbPsid])
+  @@index([workspaceId, name])
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  FOLLOW_UP
+  CONVERTED
+  LOST
+}
+
+model Lead {
+  id           String         @id @default(cuid())
+  workspaceId  String
+  contactId    String
+  title        String
+  source       String         @default("MANUAL") // COMMENT | MESSENGER | MANUAL | IMPORT
+  status       LeadStatus     @default(NEW)
+  priority     String         @default("NORMAL")
+  assignedToId String?
+  tags         String[]
+  valueCents   Int?
+  followUpAt   DateTime?
+  notes        String?
+  convertedAt  DateTime?
+  lostReason   String?
+  createdById  String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  workspace    Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contact      Contact        @relation(fields: [contactId], references: [id])
+  assignedTo   User?          @relation("LeadAssignee", fields: [assignedToId], references: [id])
+  activities   LeadActivity[]
+  tasks        FollowUpTask[]
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, assignedToId])
+}
+
+model LeadActivity {
+  id          String   @id @default(cuid())
+  workspaceId String
+  leadId      String
+  type        String   // NOTE | STATUS_CHANGE | ASSIGNMENT | CALL | MESSAGE | CREATED
+  body        String   @default("")
+  meta        Json     @default("{}")
+  actorId     String?
+  createdAt   DateTime @default(now())
+  lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, createdAt])
+}
+
+model FollowUpTask {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  leadId         String?
+  assignedToId   String
+  title          String
+  dueAt          DateTime
+  completedAt    DateTime?
+  reminderSentAt DateTime?
+  createdAt      DateTime  @default(now())
+  lead           Lead?     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  assignedTo     User      @relation(fields: [assignedToId], references: [id])
+
+  @@index([workspaceId, dueAt])
+}
+
+// ───────────────────────────── Billing & usage ─────────────────────────────
+
+model Plan {
+  id                String         @id @default(cuid())
+  key               String         @unique
+  name              String
+  description       String         @default("")
+  priceMonthlyCents Int
+  priceYearlyCents  Int
+  currency          String         @default("USD")
+  trialDays         Int            @default(14)
+  limits            Json           // { pages, users, agents, commentsPerMonth, aiRequestsPerMonth, aiBudgetMicroUsd, autoRepliesPerMonth, storageMb }
+  features          String[]
+  isPublic          Boolean        @default(true)
+  isActive          Boolean        @default(true)
+  sortOrder         Int            @default(0)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  subscriptions     Subscription[]
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  GRACE
+  CANCELED
+  EXPIRED
+  SUSPENDED
+  EXEMPT
+}
+
+model Subscription {
+  id                     String             @id @default(cuid())
+  workspaceId            String             @unique
+  planId                 String
+  status                 SubscriptionStatus
+  interval               String             @default("MONTHLY")
+  currentPeriodStart     DateTime
+  currentPeriodEnd       DateTime
+  trialEndsAt            DateTime?
+  graceEndsAt            DateTime?
+  cancelAtPeriodEnd      Boolean            @default(false)
+  canceledAt             DateTime?
+  provider               String             @default("manual")
+  providerCustomerId     String?
+  providerSubscriptionId String?
+  limitOverrides         Json               @default("{}")
+  discountPercent        Int                @default(0)
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  workspace              Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  plan                   Plan               @relation(fields: [planId], references: [id])
+}
+
+model Invoice {
+  id                String    @id @default(cuid())
+  workspaceId       String
+  subscriptionId    String?
+  number            String    @unique
+  status            String    @default("OPEN") // DRAFT | OPEN | PAID | VOID | UNCOLLECTIBLE
+  currency          String    @default("USD")
+  subtotalCents     Int
+  discountCents     Int       @default(0)
+  totalCents        Int
+  periodStart       DateTime?
+  periodEnd         DateTime?
+  dueAt             DateTime
+  paidAt            DateTime?
+  lines             Json      @default("[]")
+  provider          String    @default("manual")
+  providerInvoiceId String?
+  notes             String?
+  createdById       String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  payments          Payment[]
+
+  @@index([workspaceId, status])
+}
+
+model Payment {
+  id                String    @id @default(cuid())
+  workspaceId       String
+  invoiceId         String
+  provider          String
+  providerPaymentId String
+  amountCents       Int
+  currency          String
+  status            String    // PENDING | SUCCEEDED | FAILED | REFUNDED
+  confirmedAt       DateTime?
+  recordedById      String?
+  reference         String?
+  raw               Json      @default("{}")
+  createdAt         DateTime  @default(now())
+  invoice           Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerPaymentId])
+  @@index([workspaceId])
+}
+
+model UsageEvent {
+  id          String    @id @default(cuid())
+  workspaceId String
+  metric      String    // COMMENTS_PROCESSED | AI_REQUEST | AI_TOKENS | AI_COST_MICROUSD | AUTO_REPLY | AUTO_HIDE | STORAGE_BYTES
+  quantity    BigInt
+  period      String    // YYYY-MM
+  refType     String?
+  refId       String?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, metric, period])
+}
+
+// Aggregated, atomically-updated counters used for quota & AI budget enforcement.
+// Budget reservation is a single conditional UPDATE (see src/server/billing/usage.ts), so concurrent
+// workers cannot overspend.
+model UsageCounter {
+  workspaceId String
+  period      String
+  metric      String
+  value       BigInt @default(0)
+  reserved    BigInt @default(0)
+
+  @@id([workspaceId, period, metric])
+}
+
+model AiCredential {
+  id             String     @id @default(cuid())
+  workspaceId    String?    // null = platform-managed credential
+  provider       String     // openai | gemini | deepseek
+  label          String     @default("")
+  keyEnc         String
+  keyLast4       String
+  status         String     @default("ACTIVE") // ACTIVE | INVALID | REVOKED
+  lastVerifiedAt DateTime?
+  lastError      String?
+  createdById    String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  workspace      Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, provider])
+}
+
+model AiUsage {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  agentId        String?
+  agentVersionId String?
+  provider       String
+  model          String
+  credentialMode String   // PLATFORM | BYOK
+  purpose        String   // CLASSIFY | REPLY | TEST | EVAL | MESSENGER
+  tokensIn       Int      @default(0)
+  tokensOut      Int      @default(0)
+  costMicroUsd   BigInt   @default(0)
+  latencyMs      Int      @default(0)
+  success        Boolean
+  errorCode      String?
+  refType        String?
+  refId          String?
+  createdAt      DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([provider, createdAt])
+}
+
+// ───────────────────────────── Email & notifications ─────────────────────────────
+
+model EmailTemplate {
+  id          String   @id @default(cuid())
+  key         String
+  locale      String   @default("en")
+  category    String   // AUTH | ACCOUNT | BILLING | OPERATIONAL | MARKETING
+  subject     String
+  body        String   // lightweight markup: paragraphs + {{variables}}; rendered into branded HTML
+  ctaLabel    String?
+  isActive    Boolean  @default(true)
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([key, locale])
+}
+
+model EmailDelivery {
+  id                String    @id @default(cuid())
+  workspaceId       String?
+  userId            String?
+  toEmail           String
+  templateKey       String
+  locale            String    @default("en")
+  category          String
+  subject           String    @default("")
+  varsEnc           String?   // encrypted template variables (may contain one-time links); wiped after send
+  status            String    @default("QUEUED") // QUEUED | SENDING | SENT | FAILED | SUPPRESSED | CANCELLED
+  attempts          Int       @default(0)
+  lastError         String?
+  provider          String?
+  providerMessageId String?
+  campaignId        String?
+  scheduledAt       DateTime  @default(now())
+  sentAt            DateTime?
+  createdById       String?
+  createdAt         DateTime  @default(now())
+
+  @@index([status, scheduledAt])
+  @@index([workspaceId, createdAt])
+  @@index([campaignId])
+}
+
+model EmailSuppression {
+  email     String   @id
+  reason    String   // UNSUBSCRIBE | BOUNCE | COMPLAINT | MANUAL
+  scope     String   @default("MARKETING") // MARKETING | ALL
+  createdAt DateTime @default(now())
+}
+
+model EmailCampaign {
+  id              String    @id @default(cuid())
+  name            String
+  templateKey     String
+  category        String    @default("ACCOUNT")
+  recipientFilter Json      // { workspaceIds?: string[], roles?: string[], allOwners?: boolean }
+  vars            Json      @default("{}")
+  status          String    @default("DRAFT") // DRAFT | SCHEDULED | SENDING | SENT | CANCELLED
+  scheduledAt     DateTime?
+  sentAt          DateTime?
+  recipientCount  Int       @default(0)
+  createdById     String
+  createdAt       DateTime  @default(now())
+}
+
+model Notification {
+  id          String    @id @default(cuid())
+  workspaceId String?
+  userId      String
+  type        String
+  title       String
+  body        String    @default("")
+  link        String?
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+// ───────────────────────────── Audit ─────────────────────────────
+
+model AuditLog {
+  id          String     @id @default(cuid())
+  workspaceId String?
+  actorUserId String?
+  actorType   String     @default("USER") // USER | SYSTEM | AI | WEBHOOK
+  action      String
+  targetType  String?
+  targetId    String?
+  ip          String?
+  userAgent   String?
+  meta        Json       @default("{}")
+  createdAt   DateTime   @default(now())
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+}
