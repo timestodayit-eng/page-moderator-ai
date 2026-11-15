@@ -50,7 +50,7 @@ const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.]+/g;
 export function detectScript(text: string): Signals["script"] {
   const bn = (text.match(/[ঀ-৿]/g) ?? []).length;
   const latin = (text.match(/[A-Za-z]/g) ?? []).length;
-  if (bn && latin) return bn > latin * 3 ? "bengali" : latin > bn * 3 ? "latin" : "mixed";
+  if (bn && latin) return bn > latin * 4 ? "bengali" : latin > bn * 4 ? "latin" : "mixed";
   if (bn) return "bengali";
   if (latin) return "latin";
   return "other";

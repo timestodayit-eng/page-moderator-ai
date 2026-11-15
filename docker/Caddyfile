@@ -1,0 +1,28 @@
+# Caddy reverse proxy with automatic HTTPS (Let's Encrypt).
+# APP_DOMAIN and ACME_EMAIL come from the environment (docker-compose.yml) — never hardcode the host.
+{
+	email {$ACME_EMAIL}
+}
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# Webhooks need the raw body; Caddy passes it through untouched.
+	reverse_proxy web:3000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}
