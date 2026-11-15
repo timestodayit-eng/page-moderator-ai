@@ -5,6 +5,8 @@ import { hashPassword } from "@/server/auth/password";
 import { createWorkspace } from "@/server/platform/workspaces";
 import { createSession } from "@/server/auth/session";
 import { NextRequest } from "next/server";
+import { fastRedis } from "@/server/queue/redis";
+import { _resetMemoryLimiter } from "@/server/ratelimit";
 
 let migrated = false;
 
@@ -17,6 +19,20 @@ export async function resetDb() {
   const tables = await prisma.$queryRaw<{ tablename: string }[]>`SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'`;
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${tables.map((t) => `"${t.tablename}"`).join(", ")} CASCADE`);
   await seed();
+  await clearRateLimits();
+}
+
+/** Rate-limit buckets live in Redis; clear them so one test file cannot throttle the next. */
+export async function clearRateLimits() {
+  _resetMemoryLimiter();
+  try {
+    const r = fastRedis();
+    if (r.status !== "ready") await new Promise<void>((res) => r.once("ready", () => res()));
+    const keys = await r.keys("rl:*");
+    if (keys.length) await r.del(...keys);
+  } catch {
+    /* redis unavailable → memory limiter already cleared */
+  }
 }
 
 export async function makeUser(email: string, opts: { platformRole?: "NONE" | "SUPER_ADMIN" | "SUPPORT"; password?: string; verified?: boolean } = {}) {
