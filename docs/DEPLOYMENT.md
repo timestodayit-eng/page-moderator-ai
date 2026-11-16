@@ -112,3 +112,28 @@ server's existing reverse proxy forwards the subdomain to the app.
 3. Run an evaluation from the agent page; aim for high precision on SPAM/SCAM before enabling auto-hide
 4. Switch the Page to **Human approval**, then **Automatic** with only the categories you trust
 5. Set `META_AUTOMATION_ENABLED=true` and redeploy — until then every automated action is blocked at execution time
+
+## 10. GitHub → VPS auto-deploy (recommended)
+
+`.github/workflows/deploy.yml` runs typecheck + tests + build on every push to `main`, then SSHes into the VPS
+and runs `git reset --hard origin/main && ./docker/deploy.sh`. Nothing is deployed if a test fails.
+
+1. Create a **private** GitHub repository and push this code to `main`.
+2. On the VPS, clone it with a read-only deploy key:
+   ```bash
+   ssh-keygen -t ed25519 -N "" -f ~/.ssh/pm_deploy_key -C "page-moderator-deploy"
+   cat ~/.ssh/pm_deploy_key.pub      # → GitHub repo → Settings → Deploy keys → Add (read-only)
+   printf 'Host github.com\n  IdentityFile ~/.ssh/pm_deploy_key\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+   git clone git@github.com:<you>/<repo>.git /opt/page-moderator-ai
+   ```
+3. Let GitHub Actions log in to the VPS:
+   ```bash
+   ssh-keygen -t ed25519 -N "" -f ~/.ssh/github_actions -C "github-actions"
+   cat ~/.ssh/github_actions.pub >> ~/.ssh/authorized_keys
+   cat ~/.ssh/github_actions                 # paste as the VPS_SSH_KEY secret
+   ```
+   Repo → Settings → Secrets and variables → Actions: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_APP_DIR=/opt/page-moderator-ai`.
+4. Create `.env` on the VPS (never committed) and run the first `./docker/deploy.sh` by hand.
+5. From then on: edit → commit → push to `main` → GitHub deploys. Progress is visible under the repo's **Actions** tab.
+
+`.env.test` is committed on purpose: it holds only local test values (no real secrets) so CI can run the suite.
