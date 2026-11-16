@@ -5,6 +5,8 @@
 FROM node:22-bookworm-slim AS base
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PRISMA_HIDE_UPDATE_MESSAGE=1
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates curl && rm -rf /var/lib/apt/lists/*
+# Flaky VPS uplinks: let npm retry registry downloads instead of failing the whole build on one ECONNRESET.
+RUN npm config set -g fetch-retries 6 fetch-retry-mintimeout 20000 fetch-retry-maxtimeout 180000 fetch-timeout 900000
 WORKDIR /app
 
 # ───── all deps (build) ─────
@@ -18,10 +20,12 @@ ENV APP_URL=https://build.invalid DATABASE_URL=postgresql://build:build@localhos
 RUN npx prisma generate && npx next build && npm run build:worker
 
 # ───── production deps only ─────
+# Reuse the build stage's node_modules (one registry download per build) and strip dev packages.
 FROM base AS prod-deps
 COPY package.json package-lock.json prisma.config.ts ./
 COPY prisma ./prisma
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --no-audit --no-fund --ignore-scripts
+COPY --from=build /app/node_modules ./node_modules
+RUN npm prune --omit=dev --no-audit --no-fund --ignore-scripts
 COPY --from=build /app/src/generated ./src/generated
 
 # ───── runtime ─────
