@@ -34,6 +34,10 @@ COPY --from=build --chown=app:app /app/.next/static ./.next/static
 COPY --from=build --chown=app:app /app/public ./public
 # … plus full production node_modules for the worker, migrations and scripts.
 COPY --from=prod-deps --chown=app:app /app/node_modules ./node_modules
+# Prisma schema engine downloaded during `prisma generate` in the build stage, so `prisma migrate deploy`
+# at container start needs no network and cannot fail on a blocked download.
+COPY --from=build --chown=app:app /app/node_modules/prisma ./node_modules/prisma
+COPY --from=build --chown=app:app /app/node_modules/@prisma/engines ./node_modules/@prisma/engines
 COPY --from=build --chown=app:app /app/dist ./dist
 COPY --from=build --chown=app:app /app/prisma ./prisma
 COPY --from=build --chown=app:app /app/prisma.config.ts /app/package.json /app/tsconfig.json ./
