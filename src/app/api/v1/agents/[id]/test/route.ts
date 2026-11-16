@@ -12,7 +12,7 @@ export const POST = api({ permission: "agents.configure", body: z.object({ text:
   if (!agent) throw Errors.notFound("Agent");
   const version = await prisma.agentVersion.findFirst({ where: { agentId: agent.id, ...(body.versionId ? { id: body.versionId } : agent.activeVersionId ? { id: agent.activeVersionId } : {}) }, orderBy: { version: "desc" } });
   if (!version) throw Errors.notFound("Version");
-  const cfg = { id: agent.id, versionId: version.id, instructions: version.instructions, provider: version.provider as Provider, model: version.model, temperature: version.temperature, languages: version.languages, tone: version.tone, safetyRules: version.safetyRules, knowledgeSourceIds: version.knowledgeSourceIds };
+  const cfg = { id: agent.id, versionId: version.id, instructions: version.instructions, provider: version.provider as Provider, model: version.model, credentialId: version.credentialId, temperature: version.temperature, languages: version.languages, tone: version.tone, safetyRules: version.safetyRules, knowledgeSourceIds: version.knowledgeSourceIds };
   if (agent.purpose === "MODERATION") {
     const page = await prisma.connectedPage.findFirst({ where: { workspaceId: ws!.workspace.id }, select: { id: true, fbPageId: true } });
     const signals = await computeSignals({ pageId: page?.id ?? "test", fbPageId: page?.fbPageId ?? "test", message: body.text, createdTime: new Date() });
@@ -21,6 +21,6 @@ export const POST = api({ permission: "agents.configure", body: z.object({ text:
   }
   const knowledge = await retrieveKnowledge(ws!.workspace.id, body.text, { sourceIds: version.knowledgeSourceIds, limit: 5 });
   const sys = [`You are "${agent.name}" for ${ws!.workspace.name}. ${version.instructions}`, `Tone: ${version.tone}. Languages: ${version.languages.join(", ")}. Reply in the user's language.`, version.safetyRules ? `Safety rules: ${version.safetyRules}` : "", version.responseConstraints ? `Constraints: ${version.responseConstraints}` : "", version.escalationRules ? `Escalate (set escalate=true) when: ${version.escalationRules}` : "", knowledge.length ? `Approved knowledge:\n${knowledge.map((k, i) => `[${i + 1}] ${k.content}`).join("\n")}` : "No approved knowledge: never invent facts, prices or salaries.", `Return JSON {"reply": string, "confidence": number, "escalate": boolean, "reason": string}`].filter(Boolean).join("\n\n");
-  const res = await complete({ workspaceId: ws!.workspace.id, purpose: "TEST", provider: cfg.provider, model: cfg.model, temperature: cfg.temperature, json: true, maxTokens: 600, agentId: agent.id, agentVersionId: version.id, messages: [{ role: "system", content: sys }, { role: "user", content: body.text }] });
+  const res = await complete({ workspaceId: ws!.workspace.id, purpose: "TEST", provider: cfg.provider, credentialId: cfg.credentialId, model: cfg.model, temperature: cfg.temperature, json: true, maxTokens: 600, agentId: agent.id, agentVersionId: version.id, messages: [{ role: "system", content: sys }, { role: "user", content: body.text }] });
   return { kind: "reply", result: parseJsonObject(res.text), model: res.model, provider: res.provider, latencyMs: res.latencyMs, tokens: res.tokensIn + res.tokensOut, knowledgeUsed: knowledge.length };
 });

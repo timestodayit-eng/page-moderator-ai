@@ -24,30 +24,35 @@ async function globalLimits(): Promise<GlobalModerationLimits> {
  * Policy evaluation: turns a classification into a decision under the Page's mode and the layered limits
  * (global safety floor → Page settings → per-category thresholds → rate limits). Pure except for counts.
  */
-export async function evaluatePolicy(page: ConnectedPage, settings: PageSettings, c: Classification, opts: { commentId: string }) {
+export async function evaluatePolicy(page: ConnectedPage, settings: PageSettings, c: Classification, opts: { commentId: string; precedent?: { id: string; decision: "HIDE" | "KEEP"; how: "EXACT" | "SEMANTIC" } | null }) {
   const reasons: string[] = [];
   const g = await globalLimits();
   const cat = c.category as Category;
   let decision: Decision = c.recommended_action === "HIDE" ? "REVIEW" : (c.recommended_action as Decision);
   let autoExecute = false;
+  const ruling = opts.precedent ?? null;
+  if (ruling) reasons.push(`reviewer ruling ${ruling.id} (${ruling.decision === "HIDE" ? "always hide" : "never hide"} comments like this, ${ruling.how.toLowerCase()} match)`);
 
   if (c.recommended_action === "HIDE") {
     reasons.push(`model recommends HIDE (${cat}, conf ${c.confidence.toFixed(2)}, risk ${c.risk_score.toFixed(2)})`);
     const catCfg = settings.categories[cat];
+    const byRuling = ruling?.decision === "HIDE";
     if (PROTECTED_CATEGORIES.includes(cat)) {
       reasons.push("protected category — never hidden automatically; sent to review");
       decision = "REVIEW";
-    } else if (NEGATIVE_CATEGORIES.includes(cat) && !settings.hideNegativeSentiment) {
+    } else if (!byRuling && NEGATIVE_CATEGORIES.includes(cat) && !settings.hideNegativeSentiment) {
       reasons.push(`${cat} — hiding negative sentiment is off for this Page; sent to review`);
       decision = "REVIEW";
     } else {
       // The recommended action is HIDE; whether it executes automatically depends on the layered policy.
+      // A reviewer ruling replaces the per-category switch and confidence threshold (the human already decided),
+      // but never the Page's automation mode, explicit activation, platform allow-list, kill switch or hourly caps.
       decision = "HIDE";
       if (page.moderationMode !== "AUTO") reasons.push(`page mode ${page.moderationMode} — hide requires human approval`);
       else if (!page.autoHideEnabled) reasons.push("auto-hide not activated for this Page — awaiting approval");
-      else if (!catCfg?.autoHide) reasons.push(`auto-hide disabled for ${cat} — awaiting approval`);
+      else if (!byRuling && !catCfg?.autoHide) reasons.push(`auto-hide disabled for ${cat} — awaiting approval`);
       else if (!g.autoHideAllowedCategories.includes(cat)) reasons.push(`platform policy does not allow auto-hiding ${cat} — awaiting approval`);
-      else if (c.confidence < Math.max(catCfg.threshold, g.minAutoHideConfidence)) reasons.push(`confidence ${c.confidence.toFixed(2)} below threshold ${Math.max(catCfg.threshold, g.minAutoHideConfidence)} — awaiting approval`);
+      else if (!byRuling && c.confidence < Math.max(catCfg?.threshold ?? 0.9, g.minAutoHideConfidence)) reasons.push(`confidence ${c.confidence.toFixed(2)} below threshold ${Math.max(catCfg?.threshold ?? 0.9, g.minAutoHideConfidence)} — awaiting approval`);
       else {
         const hourAgo = new Date(Date.now() - 3_600_000);
         const recentHides = await prisma.moderationAction.count({ where: { type: "HIDE", actorType: "AI", createdAt: { gte: hourAgo }, comment: { pageId: page.id } } });
@@ -55,7 +60,7 @@ export async function evaluatePolicy(page: ConnectedPage, settings: PageSettings
         if (recentHides >= cap) reasons.push(`hourly auto-hide cap reached (${recentHides}/${cap}) — awaiting approval`);
         else {
           autoExecute = true;
-          reasons.push("all auto-hide conditions satisfied");
+          reasons.push(byRuling ? "hidden automatically per reviewer ruling" : "all auto-hide conditions satisfied");
         }
       }
     }
@@ -89,7 +94,11 @@ export async function evaluatePolicy(page: ConnectedPage, settings: PageSettings
     autoExecute = false;
     reasons.push("shadow mode — no changes made on Facebook");
   }
-  void opts;
+  if (ruling?.decision === "KEEP" && decision !== "REPLY") {
+    decision = "KEEP";
+    autoExecute = false;
+    reasons.push("kept per reviewer ruling");
+  }
   const reviewRequired = decision === "REVIEW" || ((decision === "HIDE" || decision === "REPLY") && !autoExecute);
   return { decision, autoExecute, reasons, reviewRequired };
 }
@@ -114,16 +123,16 @@ export async function processComment(commentId: string) {
     const settings = parsePageSettings(page.settings);
     const signals = await computeSignals({ pageId: page.id, fbPageId: page.fbPageId, authorFbId: comment.authorFbId, message: comment.message, fbParentId: comment.fbParentId, createdTime: comment.createdTime, commentId });
     const agent = await loadActiveAgent(ws.id, page.moderationAgentId, "MODERATION");
-    const { classification: c, meta, knowledgeUsed } = await classifyComment({ workspaceId: ws.id, pageId: page.id, commentId, message: comment.message, authorName: comment.authorName, signals, agent, businessName: (ws.businessProfile as { displayName?: string })?.displayName ?? ws.name });
+    const { classification: c, meta, knowledgeUsed, precedent } = await classifyComment({ workspaceId: ws.id, pageId: page.id, commentId, message: comment.message, authorName: comment.authorName, signals, agent, guidance: settings.moderationGuidance, businessName: (ws.businessProfile as { displayName?: string })?.displayName ?? ws.name });
 
     const classification = await prisma.commentClassification.create({
       data: {
         workspaceId: ws.id, commentId, language: c.language, category: c.category, sentiment: c.sentiment, reasoning: c.reasoning, confidence: c.confidence, riskScore: c.risk_score, recommendedAction: c.recommended_action, suggestedReply: c.suggested_reply ?? null,
         signals: { ...signals, intent: c.intent, knowledgeUsed, targetsOtherCommenter: c.targets_other_commenter, containsContactInfo: c.contains_contact_info },
-        provider: meta.provider, model: meta.model, agentVersionId: agent?.versionId ?? null, policyVersion: POLICY_VERSION, latencyMs: meta.latencyMs, tokensIn: meta.tokensIn, tokensOut: meta.tokensOut, costMicroUsd: BigInt(meta.costMicroUsd),
+        provider: meta.provider, model: meta.model, agentVersionId: agent?.versionId ?? null, policyVersion: POLICY_VERSION, precedentId: precedent?.id ?? null, latencyMs: meta.latencyMs, tokensIn: meta.tokensIn, tokensOut: meta.tokensOut, costMicroUsd: BigInt(meta.costMicroUsd),
       },
     });
-    const policy = await evaluatePolicy(page, settings, c, { commentId });
+    const policy = await evaluatePolicy(page, settings, c, { commentId, precedent });
     const decision = await prisma.moderationDecision.create({
       data: { workspaceId: ws.id, commentId, classificationId: classification.id, mode: page.moderationMode, decision: policy.decision, reasons: policy.reasons, autoExecuted: false, reviewStatus: policy.reviewRequired ? "PENDING" : "NOT_REQUIRED" },
     });

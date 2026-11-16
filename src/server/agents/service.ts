@@ -3,10 +3,10 @@ import { prisma } from "../db";
 import { Errors } from "../errors";
 import { audit } from "../audit";
 import { PROVIDER_MODELS, assertProvider, type Provider } from "../ai/gateway";
-import type { WorkspaceContext } from "../rbac/guard";
+import { assertPageAccess, type WorkspaceContext } from "../rbac/guard";
 import { enforceLimit } from "../billing/usage";
 
-export type ActiveAgent = { id: string; versionId: string; purpose: AgentPurpose; instructions: string; provider: Provider; model: string; temperature: number; languages: string[]; tone: string; safetyRules: string; allowedActions: string[]; escalationRules: string; responseConstraints: string; knowledgeSourceIds: string[] };
+export type ActiveAgent = { id: string; versionId: string; purpose: AgentPurpose; instructions: string; provider: Provider; model: string; credentialId: string | null; temperature: number; languages: string[]; tone: string; safetyRules: string; allowedActions: string[]; escalationRules: string; responseConstraints: string; knowledgeSourceIds: string[] };
 
 /** Resolve the agent to use: explicit Page assignment → workspace's active agent of that purpose → null (defaults). */
 export async function loadActiveAgent(workspaceId: string, agentId: string | null | undefined, purpose: AgentPurpose): Promise<ActiveAgent | null> {
@@ -16,22 +16,34 @@ export async function loadActiveAgent(workspaceId: string, agentId: string | nul
   if (!agent?.activeVersionId) return null;
   const v = await prisma.agentVersion.findUnique({ where: { id: agent.activeVersionId } });
   if (!v) return null;
-  return { id: agent.id, versionId: v.id, purpose: agent.purpose, instructions: v.instructions, provider: v.provider as Provider, model: v.model, temperature: v.temperature, languages: v.languages, tone: v.tone, safetyRules: v.safetyRules, allowedActions: v.allowedActions, escalationRules: v.escalationRules, responseConstraints: v.responseConstraints, knowledgeSourceIds: v.knowledgeSourceIds };
+  return { id: agent.id, versionId: v.id, purpose: agent.purpose, instructions: v.instructions, provider: v.provider as Provider, model: v.model, credentialId: v.credentialId, temperature: v.temperature, languages: v.languages, tone: v.tone, safetyRules: v.safetyRules, allowedActions: v.allowedActions, escalationRules: v.escalationRules, responseConstraints: v.responseConstraints, knowledgeSourceIds: v.knowledgeSourceIds };
 }
 
-export type VersionInput = { instructions: string; languages: string[]; tone: string; provider: string; model: string; temperature: number; safetyRules?: string; allowedActions?: string[]; escalationRules?: string; responseConstraints?: string; knowledgeSourceIds?: string[]; changeNote?: string };
+export type VersionInput = { instructions: string; languages: string[]; tone: string; provider: string; model: string; credentialId?: string | null; temperature: number; safetyRules?: string; allowedActions?: string[]; escalationRules?: string; responseConstraints?: string; knowledgeSourceIds?: string[]; changeNote?: string };
 
-function validateVersion(v: VersionInput) {
+async function validateVersion(ctx: WorkspaceContext, v: VersionInput) {
   const provider = assertProvider(v.provider);
   if (!PROVIDER_MODELS[provider].includes(v.model)) throw Errors.badRequest(`Model ${v.model} is not available for ${provider}`);
   if (v.temperature < 0 || v.temperature > 1.5) throw Errors.badRequest("Temperature must be between 0 and 1.5");
+  if (v.credentialId) {
+    // "Brain" key: a workspace-shared BYOK key, or the member's own personal key. Personal keys of other members are never usable.
+    const cred = await prisma.aiCredential.findFirst({ where: { id: v.credentialId, workspaceId: ctx.workspace.id, status: "ACTIVE" } });
+    if (!cred) throw Errors.notFound("API key");
+    if (cred.ownerUserId && cred.ownerUserId !== ctx.user.id) throw Errors.forbidden("That API key belongs to another team member");
+    if (cred.provider !== provider) throw Errors.badRequest(`The selected API key is for ${cred.provider}, not ${provider}`);
+  }
   return provider;
 }
 
 export async function createAgent(ctx: WorkspaceContext, input: { name: string; description?: string; purpose: AgentPurpose; pageId?: string | null; version: VersionInput; activate?: boolean }, meta: { ip?: string | null }) {
-  validateVersion(input.version);
+  await validateVersion(ctx, input.version);
   const count = await prisma.agent.count({ where: { workspaceId: ctx.workspace.id, status: { not: "ARCHIVED" } } });
   await enforceLimit(ctx.workspace.id, "agents", count + 1);
+  if (ctx.access.maxAgents !== null) {
+    const mine = await prisma.agent.count({ where: { workspaceId: ctx.workspace.id, createdById: ctx.user.id, status: { not: "ARCHIVED" } } });
+    if (mine + 1 > ctx.access.maxAgents) throw Errors.forbidden(`Your account may create at most ${ctx.access.maxAgents} AI agent${ctx.access.maxAgents === 1 ? "" : "s"}. Ask the workspace owner to raise your limit.`);
+  }
+  if (input.pageId) assertPageAccess(ctx, input.pageId);
   if (input.pageId) {
     const page = await prisma.connectedPage.findFirst({ where: { id: input.pageId, workspaceId: ctx.workspace.id } });
     if (!page) throw Errors.notFound("Page");
@@ -50,12 +62,12 @@ export async function createAgent(ctx: WorkspaceContext, input: { name: string; 
 }
 
 function versionData(v: VersionInput) {
-  return { instructions: v.instructions, languages: v.languages, tone: v.tone, provider: v.provider, model: v.model, temperature: v.temperature, safetyRules: v.safetyRules ?? "", allowedActions: v.allowedActions ?? [], escalationRules: v.escalationRules ?? "", responseConstraints: v.responseConstraints ?? "", knowledgeSourceIds: v.knowledgeSourceIds ?? [], changeNote: v.changeNote ?? "" };
+  return { instructions: v.instructions, languages: v.languages, tone: v.tone, provider: v.provider, model: v.model, credentialId: v.credentialId ?? null, temperature: v.temperature, safetyRules: v.safetyRules ?? "", allowedActions: v.allowedActions ?? [], escalationRules: v.escalationRules ?? "", responseConstraints: v.responseConstraints ?? "", knowledgeSourceIds: v.knowledgeSourceIds ?? [], changeNote: v.changeNote ?? "" };
 }
 
 /** Every configuration change creates a new immutable version; activation is explicit. */
 export async function addVersion(ctx: WorkspaceContext, agentId: string, input: VersionInput & { activate?: boolean }, meta: { ip?: string | null }) {
-  validateVersion(input);
+  await validateVersion(ctx, input);
   const agent = await prisma.agent.findFirst({ where: { id: agentId, workspaceId: ctx.workspace.id } });
   if (!agent) throw Errors.notFound("Agent");
   const last = await prisma.agentVersion.findFirst({ where: { agentId }, orderBy: { version: "desc" } });

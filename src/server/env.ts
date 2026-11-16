@@ -37,9 +37,12 @@ const schema = z.object({
     .default("pages_show_list,pages_read_engagement,pages_read_user_content,pages_manage_engagement,pages_manage_metadata,pages_messaging"),
   META_AUTOMATION_ENABLED: bool, // global master switch: automatic Meta actions stay off until explicitly enabled
 
-  DEFAULT_AI_PROVIDER: z.enum(["openai", "gemini", "deepseek"]).default("openai"),
+  DEFAULT_AI_PROVIDER: z.enum(["openai", "anthropic", "gemini", "deepseek"]).default("openai"),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-4.1-mini"),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_MODEL: z.string().default("claude-sonnet-4-5"),
+  ANTHROPIC_BASE_URL: z.url().default("https://api.anthropic.com"),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-2.5-flash"),
   DEEPSEEK_API_KEY: z.string().optional(),

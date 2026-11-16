@@ -39,11 +39,13 @@ Every tenant-owned table has `workspaceId`. Services receive a `WorkspaceContext
 
 ```
 comment → signals (urls, repeats, author history)
-        → LLM classification (JSON, 17 categories incl. DEFAMATION; understands Bengali/Banglish slang, sarcasm, negative vibe — no keyword lists)
+        → reviewer precedents (ModerationPrecedent): exact/near-exact text → ruling applied, no AI call; otherwise top candidates injected as binding rulings
+        → LLM classification (JSON, 17 categories incl. DEFAMATION; understands Bengali/Banglish slang, sarcasm, negative vibe — no keyword lists; reports precedent_match)
         → deterministic rules (inquiries/positive/neutral can never be HIDE, low-confidence → UNCERTAIN/REVIEW, repeats → REPEATED_PROMO)
         → policy: SHADOW | APPROVAL | AUTO
              AUTO requires: autoHideEnabled (explicit) ∧ category enabled ∧ platform allow-list ∧ confidence ≥ max(page, platform) ∧ hourly cap
              COMPLAINT / NEGATIVE additionally require the Page's `hideNegativeSentiment` switch (off by default → review queue)
+             A HIDE ruling replaces the per-category switch + threshold; a KEEP ruling forces KEEP. Mode, activation, allow-list, kill switch and caps still apply.
         → decision row (always) → outbound action (only if allowed) → audit
 guards at execution time: META_AUTOMATION_ENABLED, workspace active, emergency pause, Page kill switch, token valid
 ```
@@ -56,3 +58,9 @@ Every decision stores reasoning, confidence, risk, model, policy version, latenc
 - **OutboundAction claims**: `UPDATE … WHERE status='PENDING'` → exactly one worker executes; lock expiry → reconciliation.
 - **UsageCounter reservations**: `UPDATE … WHERE value + reserved + est <= budget` → no overspend under concurrency.
 - **UTC everywhere**: Prisma stores `timestamp(3)` in UTC; the pg pool pins `timezone=UTC`; raw SQL uses `NOW() AT TIME ZONE 'UTC'`.
+
+## Team access limits & AI keys
+
+- `Membership.pageAccess` (ALL | ASSIGNED) + `allowedPageIds`, `maxPages`, `maxAgents` — resolved into `WorkspaceContext.access` by the RBAC guard. `pageScope()` / `assertPageAccess()` are applied in pages, comments, review, moderation stats, inbox and agents. Members with ASSIGNED access cannot grant broader access than they hold. Invitations carry the same fields.
+- `AiCredential.ownerUserId` — personal keys (only the owner can list/use/revoke them). `AgentVersion.credentialId` pins an agent to one key; `resolveCredential()` honours the pin before workspace mode, with no silent fallback.
+- Providers: openai, anthropic (Messages API, JSON via "{" prefill), gemini, deepseek.

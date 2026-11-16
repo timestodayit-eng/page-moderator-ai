@@ -16,6 +16,8 @@ Legend: ✅ verified by automated tests and/or a running instance in this build 
 | Disconnect Page (confirmation, credentials removed, actions cancelled, history kept, other Pages untouched) | ✅ | `meta-moderation.test.ts` |
 | AI classification pipeline, deterministic rules, policy engine, modes, thresholds, caps, kill switch, emergency pause | ✅ (mocked model) ⚠️ (model quality) | `meta-moderation.test.ts`, `classifier-rules.test.ts`, live run |
 | Automatic hide off by default; explicit activation; negative-sentiment hiding is a per-Page opt-in (defamation / slang / negative vibe hidden automatically when on — verified live with Bengali comments) | ✅ | `meta-moderation.test.ts`, live run |
+| Review panel rulings: "always hide / never hide comments like this" learned per Page or workspace; exact matches skip the AI, paraphrases matched by the model; manageable in Training Center | ✅ | `team-access-precedents.test.ts`, live run |
+| Per-member access limits (assigned Pages, max Pages, max agents) enforced server-side; personal BYOK keys incl. Anthropic (Claude) pinned to agents; per-Page plain-language AI instructions | ✅ | `team-access-precedents.test.ts` |
 | Outbound actions: idempotency, atomic claim, retry/backoff, reconciliation, auth-error handling | ✅ | `meta-moderation.test.ts` |
 | Review queue, approve/reject/correct → training examples, unhide = false-positive | ✅ | tests + browser (approved a hide through the UI, Graph mock received `is_hidden=true`) |
 | Agent Studio (versions, activation, playground), Training Center (knowledge text/upload, examples, bulk import), evaluations with metrics | ✅ (mocked model) | `inbox-crm-agents.test.ts` |

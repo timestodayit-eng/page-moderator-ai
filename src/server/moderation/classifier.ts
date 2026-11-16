@@ -2,6 +2,8 @@ import { z } from "zod";
 import { prisma } from "../db";
 import { complete, parseJsonObject, type Provider } from "../ai/gateway";
 import { retrieveKnowledge } from "../agents/knowledge";
+import { loadPrecedents, matchPrecedents, recordHit, type PrecedentLite } from "./precedents";
+import type { CompletionResult } from "../ai/gateway";
 
 export const CATEGORIES = [
   "POSITIVE", "NEUTRAL", "INQUIRY", "SALES_INQUIRY", "COMPLAINT", "NEGATIVE", "DEFAMATION", "ABUSE", "HARASSMENT", "HATE_SPEECH", "SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "PII_EXPOSURE", "HIGH_RISK", "UNCERTAIN",
@@ -34,6 +36,7 @@ export const classificationSchema = z.object({
   contains_contact_info: z.boolean().optional().default(false),
   negative_vibe: z.boolean().optional().default(false),
   slang_detected: z.boolean().optional().default(false),
+  precedent_match: z.string().nullable().optional().default(null),
 });
 export type Classification = z.infer<typeof classificationSchema>;
 
@@ -124,8 +127,9 @@ Rules:
 4. confidence = how sure you are about the category. risk_score = potential harm to the community/business if the comment stays visible (0 = none, 1 = severe).
 5. If recommended_action is REPLY and business knowledge is provided, write suggested_reply in the SAME language/script as the comment, warm and professional, 1-3 sentences, never inventing prices, salaries, dates or guarantees. If the needed fact is not in the knowledge, politely direct them to the official contact instead. Otherwise set suggested_reply to null.
 6. Keep reasoning short (one or two sentences, English).
+7. Reviewer rulings: the business's reviewers may have ruled on earlier comments ("ALWAYS hide comments like this" / "NEVER hide comments like this"). These rulings are BINDING and override your own judgement. If the new comment carries the same meaning, accusation, topic or intent as a ruling — even with different wording, spelling, language or script — set precedent_match to that ruling's id and follow its decision (HIDE → recommended_action HIDE; KEEP → never HIDE). If no ruling applies, set precedent_match to null. Never invent ids.
 
-Return ONLY JSON with keys: language, category, sentiment, confidence, risk_score, reasoning, recommended_action, intent, suggested_reply, targets_other_commenter, contains_contact_info, negative_vibe, slang_detected.`;
+Return ONLY JSON with keys: language, category, sentiment, confidence, risk_score, reasoning, recommended_action, intent, suggested_reply, targets_other_commenter, contains_contact_info, negative_vibe, slang_detected, precedent_match.`;
 
 export type ClassifyInput = {
   workspaceId: string;
@@ -135,12 +139,47 @@ export type ClassifyInput = {
   authorName?: string | null;
   postContext?: string | null;
   signals: Signals;
-  agent?: { id: string; versionId: string; instructions: string; provider: Provider; model: string; temperature: number; languages: string[]; tone: string; safetyRules: string; knowledgeSourceIds: string[] } | null;
+  agent?: { id: string; versionId: string; instructions: string; provider: Provider; model: string; credentialId?: string | null; temperature: number; languages: string[]; tone: string; safetyRules: string; knowledgeSourceIds: string[] } | null;
   businessName: string;
+  /** Page owner's plain-language moderation instructions (settings.moderationGuidance). */
+  guidance?: string | null;
   purpose?: "CLASSIFY" | "EVAL" | "TEST";
 };
 
-export async function classifyComment(input: ClassifyInput) {
+export type ClassifyMeta = Omit<CompletionResult, "provider"> & { provider: CompletionResult["provider"] | "precedent" };
+export type ClassifyOutput = { classification: Classification; meta: ClassifyMeta; knowledgeUsed: number; precedent: { id: string; decision: "HIDE" | "KEEP"; how: "EXACT" | "SEMANTIC" } | null };
+
+function fromPrecedent(p: PrecedentLite, s: Signals): Classification {
+  const hide = p.decision === "HIDE";
+  return {
+    language: s.script === "bengali" ? "bn" : s.script === "latin" ? "en" : s.script === "mixed" ? "mixed" : "other",
+    category: p.category as Category,
+    sentiment: hide ? "negative" : "neutral",
+    confidence: 0.99,
+    risk_score: hide ? 0.9 : 0.05,
+    reasoning: `Matches a reviewer ruling (${hide ? "always hide" : "never hide"} comments like this)${p.note ? `: ${p.note.slice(0, 160)}` : "."}`,
+    recommended_action: hide ? "HIDE" : "KEEP",
+    intent: hide ? "reputation-damaging (per reviewer ruling)" : "acceptable (per reviewer ruling)",
+    suggested_reply: null,
+    targets_other_commenter: false,
+    contains_contact_info: s.hasPhone || s.hasEmail,
+    negative_vibe: hide,
+    slang_detected: false,
+    precedent_match: p.id,
+  };
+}
+
+export async function classifyComment(input: ClassifyInput): Promise<ClassifyOutput> {
+  // 1) Reviewer precedents: exact / near-exact text applies the ruling without spending an AI call.
+  const precedents = await loadPrecedents(input.workspaceId, input.pageId);
+  const match = matchPrecedents(input.message, precedents);
+  if (match.exact) {
+    await recordHit(match.exact.id);
+    const c = applyDeterministicRules(fromPrecedent(match.exact, input.signals), input.signals, { precedent: true });
+    return { classification: c, meta: { text: "", tokensIn: 0, tokensOut: 0, model: "precedent", provider: "precedent", latencyMs: 0, costMicroUsd: 0 }, knowledgeUsed: 0, precedent: { id: match.exact.id, decision: match.exact.decision, how: "EXACT" } };
+  }
+  const candidateById = new Map(match.candidates.map((c) => [c.precedent.id, c.precedent]));
+
   const knowledge = input.agent?.knowledgeSourceIds?.length ? await retrieveKnowledge(input.workspaceId, input.message, { sourceIds: input.agent.knowledgeSourceIds, limit: 5 }) : await retrieveKnowledge(input.workspaceId, input.message, { limit: 4 });
   const examples = await prisma.trainingExample.findMany({ where: { workspaceId: input.workspaceId, kind: "MODERATION", status: "ACTIVE", ...(input.agent ? { OR: [{ agentId: input.agent.id }, { agentId: null }] } : {}) }, orderBy: { updatedAt: "desc" }, take: 12, select: { text: true, category: true, expectedDecision: true, explanation: true } });
 
@@ -148,10 +187,14 @@ export async function classifyComment(input: ClassifyInput) {
     SYSTEM_PROMPT,
     `Business: ${input.businessName}.`,
     input.agent?.instructions ? `Business-specific instructions:\n${input.agent.instructions}` : "",
+    input.guidance?.trim() ? `Page owner's moderation instructions (binding — they define what counts as negative or acceptable for THIS business):\n${input.guidance.trim().slice(0, 4000)}` : "",
     input.agent?.safetyRules ? `Additional safety rules:\n${input.agent.safetyRules}` : "",
     input.agent?.tone ? `Reply tone: ${input.agent.tone}.` : "",
     knowledge.length ? `Approved business knowledge (use ONLY this for facts in replies):\n${knowledge.map((k, i) => `[${i + 1}] ${k.content}`).join("\n")}` : "No business knowledge available: never state prices, salaries or guarantees in replies.",
     examples.length ? `Labelled examples from this business's reviewers:\n${examples.map((e) => `- "${e.text.slice(0, 200)}" → ${e.category}${e.expectedDecision ? ` / ${e.expectedDecision}` : ""}${e.explanation ? ` (${e.explanation.slice(0, 120)})` : ""}`).join("\n")}` : "",
+    match.candidates.length
+      ? `Reviewer rulings (BINDING — see rule 7). Each line: id | decision | scope | the comment that was ruled on:\n${match.candidates.map((c) => `- ${c.precedent.id} | ${c.precedent.decision === "HIDE" ? "ALWAYS HIDE" : "NEVER HIDE"} | ${c.precedent.pageId ? "this Page" : "all Pages"} | "${c.precedent.text.slice(0, 220)}"${c.precedent.note ? ` (reviewer note: ${c.precedent.note.slice(0, 100)})` : ""}`).join("\n")}`
+      : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -163,6 +206,7 @@ export async function classifyComment(input: ClassifyInput) {
     workspaceId: input.workspaceId,
     purpose: input.purpose ?? "CLASSIFY",
     provider: input.agent?.provider,
+    credentialId: input.agent?.credentialId,
     model: input.agent?.model,
     temperature: input.agent?.temperature ?? 0.1,
     maxTokens: 700,
@@ -177,10 +221,23 @@ export async function classifyComment(input: ClassifyInput) {
   });
   const raw = parseJsonObject<unknown>(result.text);
   const parsed = classificationSchema.safeParse(raw);
-  const classification: Classification = parsed.success
+  let classification: Classification = parsed.success
     ? parsed.data
-    : { language: "other", category: "UNCERTAIN", sentiment: "neutral", confidence: 0.3, risk_score: 0.2, reasoning: "Model output failed validation; routed to human review.", recommended_action: "REVIEW", intent: "", suggested_reply: null, targets_other_commenter: false, contains_contact_info: false, negative_vibe: false, slang_detected: false };
-  return { classification: applyDeterministicRules(classification, s), meta: result, knowledgeUsed: knowledge.length };
+    : { language: "other", category: "UNCERTAIN", sentiment: "neutral", confidence: 0.3, risk_score: 0.2, reasoning: "Model output failed validation; routed to human review.", recommended_action: "REVIEW", intent: "", suggested_reply: null, targets_other_commenter: false, contains_contact_info: false, negative_vibe: false, slang_detected: false, precedent_match: null };
+
+  // 2) Semantic precedent: the model recognised the same meaning as an earlier ruling.
+  const matched = classification.precedent_match ? candidateById.get(classification.precedent_match) : undefined;
+  if (matched) {
+    await recordHit(matched.id);
+    if (matched.decision === "HIDE") {
+      classification = { ...classification, category: HARMFUL_CATEGORIES.includes(classification.category) ? classification.category : (matched.category as Category), recommended_action: "HIDE", confidence: Math.max(classification.confidence, 0.92), risk_score: Math.max(classification.risk_score, 0.8), negative_vibe: true, reasoning: `${classification.reasoning} Matches reviewer ruling (always hide comments like this).` };
+    } else {
+      classification = { ...classification, recommended_action: classification.recommended_action === "REPLY" ? "REPLY" : "KEEP", risk_score: Math.min(classification.risk_score, 0.2), reasoning: `${classification.reasoning} Matches reviewer ruling (never hide comments like this).` };
+    }
+  } else {
+    classification = { ...classification, precedent_match: null };
+  }
+  return { classification: applyDeterministicRules(classification, s, { precedent: Boolean(matched) }), meta: result, knowledgeUsed: knowledge.length, precedent: matched ? { id: matched.id, decision: matched.decision, how: "SEMANTIC" } : null };
 }
 
 /**
@@ -190,9 +247,14 @@ export async function classifyComment(input: ClassifyInput) {
  *  - repeated identical promotional text → REPEATED_PROMO
  *  - low confidence → UNCERTAIN/REVIEW
  */
-export function applyDeterministicRules(c: Classification, s: Signals): Classification {
+export function applyDeterministicRules(c: Classification, s: Signals, opts: { precedent?: boolean } = {}): Classification {
   const out = { ...c };
   if (s.isPageOwnComment) return { ...out, category: out.category === "UNCERTAIN" ? "NEUTRAL" : out.category, recommended_action: "KEEP", risk_score: 0, reasoning: `${out.reasoning} Comment is from the Page itself.` };
+  if (opts.precedent) {
+    // A reviewer ruling is final: only the Page-own-comment guard above and the protected-category guard apply.
+    if (PROTECTED_CATEGORIES.includes(out.category) && out.recommended_action === "HIDE") out.category = "NEGATIVE";
+    return out;
+  }
   if (s.repeatedByAuthor >= 2 && (out.category === "SPAM" || out.category === "SCAM" || out.category === "SUSPICIOUS_LINK" || (s.hasUrl && out.category !== "COMPLAINT" && out.category !== "INQUIRY"))) {
     out.category = "REPEATED_PROMO";
     out.recommended_action = "HIDE";

@@ -4,7 +4,7 @@ import { vi } from "vitest";
  * Fetch-level mocks for Meta Graph API and AI providers. Records every call so tests can assert on
  * duplicates. Attach with `installMocks()`; override specific behaviours per test.
  */
-export type MockState = { graphCalls: { method: string; url: string; body?: string }[]; aiCalls: number; aiResponse: () => unknown; graphFail?: (url: string) => Response | null; commentReplies: Record<string, { id: string; from: { id: string }; message: string }[]> };
+export type MockState = { graphCalls: { method: string; url: string; body?: string }[]; aiCalls: number; aiResponse: () => unknown; lastAnthropicRequest?: { headers: Record<string, string>; body: unknown }; graphFail?: (url: string) => Response | null; commentReplies: Record<string, { id: string; from: { id: string }; message: string }[]> };
 
 export const mock: MockState = { graphCalls: [], aiCalls: 0, aiResponse: () => ({}), commentReplies: {} };
 
@@ -51,8 +51,20 @@ export function installMocks() {
       const body = JSON.parse(String(init?.body ?? "{}")) as { messages: { role: string; content: string }[] };
       const text = body.messages.at(-1)?.content ?? "";
       const out = mock.aiResponse();
-      const resp = typeof out === "function" ? (out as (t: string) => unknown)(text) : out;
+      const sys = body.messages.find((m) => m.role === "system")?.content ?? "";
+      const resp = typeof out === "function" ? (out as (t: string, sys: string) => unknown)(text, sys) : out;
       return json({ choices: [{ message: { content: JSON.stringify(resp) } }], usage: { prompt_tokens: 500, completion_tokens: 120 }, model: "gpt-4.1-mini" });
+    }
+    if (url.includes("api.anthropic.com")) {
+      mock.aiCalls++;
+      mock.lastAnthropicRequest = { headers: (init?.headers ?? {}) as Record<string, string>, body: JSON.parse(String(init?.body ?? "{}")) };
+      const body = mock.lastAnthropicRequest.body as { system?: string; messages: { role: string; content: string }[] };
+      const user = body.messages.find((m) => m.role === "user")?.content ?? "";
+      const out = mock.aiResponse();
+      const resp = typeof out === "function" ? (out as (t: string, sys: string) => unknown)(user, body.system ?? "") : out;
+      // Anthropic returns the continuation after the "{" prefill — reproduce that quirk.
+      const textOut = JSON.stringify(resp).slice(1);
+      return json({ id: "msg_1", type: "message", role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text: textOut }], usage: { input_tokens: 500, output_tokens: 120 } });
     }
     if (url.includes("generativelanguage.googleapis.com")) {
       mock.aiCalls++;

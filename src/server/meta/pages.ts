@@ -6,7 +6,7 @@ import { audit } from "../audit";
 import { log } from "../log";
 import { decrypt, decryptJson, encrypt, encryptJson, generateToken, sha256 } from "../crypto";
 import { graph, GraphError } from "./graph";
-import type { WorkspaceContext } from "../rbac/guard";
+import { assertPageAccess, type WorkspaceContext } from "../rbac/guard";
 import { enforceLimit } from "../billing/usage";
 import { appLink, queueEmail } from "../email/service";
 
@@ -96,6 +96,16 @@ export async function handleCallback(input: { code?: string; state?: string; coo
 type HeldPages = { pages: { id: string; name: string; token: string; category?: string; pictureUrl?: string; tasks: string[] }[]; granted: string[] };
 
 /** Step 2: user picks Pages → store encrypted tokens, subscribe webhooks, verify. */
+/** Per-member cap on the number of Pages they may handle (set by the workspace owner in Team → Access). */
+async function assertMemberPageCapacity(ctx: WorkspaceContext, adding: number) {
+  const max = ctx.access.maxPages;
+  if (max === null || !ctx.membership) return;
+  const current = ctx.access.pageAccess === "ASSIGNED"
+    ? await prisma.connectedPage.count({ where: { id: { in: ctx.access.allowedPageIds }, workspaceId: ctx.workspace.id, status: { not: "DISCONNECTED" } } })
+    : await prisma.connectedPage.count({ where: { workspaceId: ctx.workspace.id, connectedById: ctx.user.id, status: { not: "DISCONNECTED" } } });
+  if (current + adding > max) throw Errors.forbidden(`Your account may handle at most ${max} Page${max === 1 ? "" : "s"} (currently ${current}). Ask the workspace owner to raise your limit.`);
+}
+
 export async function connectSelectedPages(ctx: WorkspaceContext, selectionToken: string, pageIds: string[], meta: { ip?: string | null }) {
   const row = await prisma.oAuthState.findUnique({ where: { stateHash: sha256(selectionToken) } });
   if (!row || row.provider !== "meta-selection" || row.usedAt || row.expiresAt <= new Date()) throw Errors.badRequest("Page selection expired. Please reconnect with Facebook.");
@@ -111,6 +121,7 @@ export async function connectSelectedPages(ctx: WorkspaceContext, selectionToken
     if (!exists || exists.status === "DISCONNECTED") newOnes.push(p);
   }
   await enforceLimit(ctx.workspace.id, "pages", connected + newOnes.length);
+  await assertMemberPageCapacity(ctx, newOnes.length);
   await prisma.oAuthState.update({ where: { id: row.id }, data: { usedAt: new Date(), payloadEnc: null } });
 
   const results: { id: string; fbPageId: string; name: string; status: string; webhookSubscribed: boolean; error?: string }[] = [];
@@ -151,6 +162,12 @@ export async function connectSelectedPages(ctx: WorkspaceContext, selectionToken
     }
     results.push({ id: page.id, fbPageId: p.id, name: p.name, status: page.status, webhookSubscribed: subscribed, error });
   }
+  // Members with an assigned-Pages scope automatically receive access to the Pages they just connected.
+  const connectedIds = results.filter((r) => !r.error).map((r) => r.id);
+  if (ctx.access.pageAccess === "ASSIGNED" && ctx.membership && connectedIds.length) {
+    const merged = Array.from(new Set([...ctx.access.allowedPageIds, ...connectedIds]));
+    await prisma.membership.update({ where: { id: ctx.membership.id }, data: { allowedPageIds: merged } });
+  }
   return { results };
 }
 
@@ -177,6 +194,9 @@ const settingsSchema = z.object({
   // When true, COMPLAINT / NEGATIVE comments the AI judges reputation-damaging may be hidden automatically
   // (same thresholds/caps). When false they are only queued for review.
   hideNegativeSentiment: z.boolean().default(false),
+  // Short plain-language instructions from the Page owner for the AI, e.g. which topics count as negative for
+  // this business and must be hidden, what must never be hidden, how to answer. Injected into every classification.
+  moderationGuidance: z.string().max(4000).default(""),
   autoReplyCategories: z.array(z.string()).default(["INQUIRY", "SALES_INQUIRY", "POSITIVE"]),
   maxAutoRepliesPerHour: z.number().int().min(1).max(500).default(30),
   replyMinConfidence: z.number().min(0.5).max(1).default(0.85),
@@ -186,6 +206,7 @@ export type PageSettings = z.infer<typeof settingsSchema>;
 export const parsePageSettings = (raw: unknown): PageSettings => settingsSchema.parse(raw ?? {});
 
 export async function updatePageConfig(ctx: WorkspaceContext, pageId: string, patch: { moderationMode?: "SHADOW" | "APPROVAL" | "AUTO"; autoHideEnabled?: boolean; killSwitch?: boolean; replyMode?: "OFF" | "SUGGEST" | "APPROVAL" | "LIMITED_AUTO"; moderationAgentId?: string | null; replyAgentId?: string | null; messengerAgentId?: string | null; settings?: unknown }, meta: { ip?: string | null }) {
+  assertPageAccess(ctx, pageId);
   const page = await prisma.connectedPage.findFirst({ where: { id: pageId, workspaceId: ctx.workspace.id } });
   if (!page) throw Errors.notFound("Page");
   const data: Record<string, unknown> = {};
@@ -221,6 +242,7 @@ export async function updatePageConfig(ctx: WorkspaceContext, pageId: string, pa
  * credentials, keep history. Only the given Page is affected.
  */
 export async function disconnectPage(ctx: WorkspaceContext, pageId: string, meta: { ip?: string | null }) {
+  assertPageAccess(ctx, pageId);
   const page = await prisma.connectedPage.findFirst({ where: { id: pageId, workspaceId: ctx.workspace.id }, include: { credential: true } });
   if (!page) throw Errors.notFound("Page");
   if (page.status === "DISCONNECTED") return { alreadyDisconnected: true };
@@ -247,7 +269,7 @@ export async function disconnectPage(ctx: WorkspaceContext, pageId: string, meta
   return { alreadyDisconnected: false, webhookRemoved };
 }
 
-export async function listPages(workspaceId: string) {
-  const pages = await prisma.connectedPage.findMany({ where: { workspaceId }, orderBy: [{ status: "asc" }, { connectedAt: "desc" }], include: { _count: { select: { comments: true, conversations: true } } } });
+export async function listPages(workspaceId: string, scope: { in: string[] } | null = null) {
+  const pages = await prisma.connectedPage.findMany({ where: { workspaceId, ...(scope ? { id: scope } : {}) }, orderBy: [{ status: "asc" }, { connectedAt: "desc" }], include: { _count: { select: { comments: true, conversations: true } } } });
   return pages.map((p) => ({ ...p, settings: parsePageSettings(p.settings), hasCredential: undefined }));
 }

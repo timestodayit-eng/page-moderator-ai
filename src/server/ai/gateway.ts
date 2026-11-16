@@ -5,7 +5,8 @@ import { log } from "../log";
 import { Errors } from "../errors";
 import { platformAiSpendThisMonth, reserveAiQuota } from "../billing/usage";
 
-export type Provider = "openai" | "gemini" | "deepseek";
+export type Provider = "openai" | "anthropic" | "gemini" | "deepseek";
+export const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "deepseek"];
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 export type CompletionRequest = { messages: ChatMessage[]; model?: string; temperature?: number; maxTokens?: number; json?: boolean };
 export type CompletionResult = { text: string; tokensIn: number; tokensOut: number; model: string; provider: Provider; latencyMs: number; costMicroUsd: number };
@@ -26,6 +27,9 @@ const DEFAULT_PRICES: Record<string, { in: number; out: number }> = {
   "gpt-4.1": { in: 2, out: 8 },
   "gpt-4o-mini": { in: 0.15, out: 0.6 },
   "gpt-4o": { in: 2.5, out: 10 },
+  "claude-sonnet-4-5": { in: 3, out: 15 },
+  "claude-haiku-4-5": { in: 1, out: 5 },
+  "claude-opus-4-1": { in: 15, out: 75 },
   "gemini-2.5-flash": { in: 0.3, out: 2.5 },
   "gemini-2.5-pro": { in: 1.25, out: 10 },
   "gemini-2.0-flash": { in: 0.1, out: 0.4 },
@@ -40,6 +44,7 @@ export function estimateCostMicroUsd(model: string, tokensIn: number, tokensOut:
 
 export const PROVIDER_MODELS: Record<Provider, string[]> = {
   openai: ["gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o"],
+  anthropic: ["claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-1"],
   gemini: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
   deepseek: ["deepseek-chat", "deepseek-reasoner"],
 };
@@ -95,8 +100,34 @@ async function gemini(apiKey: string, req: CompletionRequest, model: string): Pr
   return { text, tokensIn, tokensOut, model, provider: "gemini", latencyMs: Date.now() - started, costMicroUsd: estimateCostMicroUsd(model, tokensIn, tokensOut) };
 }
 
+/** Anthropic Messages API. JSON mode is enforced via instruction + an assistant prefill of "{". */
+async function anthropic(apiKey: string, req: CompletionRequest, model: string): Promise<CompletionResult> {
+  const started = Date.now();
+  const system = req.messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
+  const messages = req.messages.filter((m) => m.role !== "system").map((m) => ({ role: m.role, content: m.content }));
+  if (!messages.length || messages[0].role !== "user") messages.unshift({ role: "user", content: "(continue)" });
+  if (req.json) messages.push({ role: "assistant", content: "{" });
+  const res = await withTimeout(
+    fetch(`${env().ANTHROPIC_BASE_URL.replace(/\/$/, "")}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
+      body: JSON.stringify({ model, max_tokens: req.maxTokens ?? 800, temperature: req.temperature ?? 0.2, ...(system ? { system: req.json ? `${system}\n\nRespond with a single JSON object and nothing else.` : system } : {}), messages }),
+    }),
+    env().AI_REQUEST_TIMEOUT_MS,
+  );
+  if (!res.ok) throw mapHttpError("anthropic", res.status, await res.text());
+  const data = (await res.json()) as { content?: { type: string; text?: string }[]; usage?: { input_tokens?: number; output_tokens?: number }; model?: string };
+  let text = data.content?.filter((c) => c.type === "text").map((c) => c.text ?? "").join("") ?? "";
+  if (req.json && !text.trimStart().startsWith("{")) text = `{${text}`;
+  const tokensIn = data.usage?.input_tokens ?? 0;
+  const tokensOut = data.usage?.output_tokens ?? 0;
+  return { text, tokensIn, tokensOut, model: data.model ?? model, provider: "anthropic", latencyMs: Date.now() - started, costMicroUsd: estimateCostMicroUsd(model, tokensIn, tokensOut) };
+}
+
 export async function callProvider(provider: Provider, apiKey: string, req: CompletionRequest, model: string): Promise<CompletionResult> {
   switch (provider) {
+    case "anthropic":
+      return anthropic(apiKey, req, model);
     case "openai":
       return openaiCompatible(env().OPENAI_BASE_URL.replace(/\/$/, ""), "openai", apiKey, req, model);
     case "deepseek":
@@ -112,11 +143,11 @@ export type ResolvedCredential = { provider: Provider; apiKey: string; mode: "PL
 
 export function platformKey(provider: Provider): string | undefined {
   const e = env();
-  return provider === "openai" ? e.OPENAI_API_KEY : provider === "gemini" ? e.GEMINI_API_KEY : e.DEEPSEEK_API_KEY;
+  return provider === "openai" ? e.OPENAI_API_KEY : provider === "anthropic" ? e.ANTHROPIC_API_KEY : provider === "gemini" ? e.GEMINI_API_KEY : e.DEEPSEEK_API_KEY;
 }
 export function platformDefaultModel(provider: Provider) {
   const e = env();
-  return provider === "openai" ? e.OPENAI_MODEL : provider === "gemini" ? e.GEMINI_MODEL : e.DEEPSEEK_MODEL;
+  return provider === "openai" ? e.OPENAI_MODEL : provider === "anthropic" ? e.ANTHROPIC_MODEL : provider === "gemini" ? e.GEMINI_MODEL : e.DEEPSEEK_MODEL;
 }
 
 /**
@@ -125,14 +156,23 @@ export function platformDefaultModel(provider: Provider) {
  *    back to platform credentials unless the Super Admin enabled `allowPlatformFallback` for that workspace.
  *  - Platform-managed workspaces use platform keys, counted against their subscription allowance.
  */
-export async function resolveCredential(workspaceId: string, preferredProvider?: Provider): Promise<ResolvedCredential> {
+export async function resolveCredential(workspaceId: string, preferredProvider?: Provider, pinnedCredentialId?: string | null): Promise<ResolvedCredential> {
+  // An agent pinned to a specific BYOK key (e.g. a team member's personal OpenAI/Claude key) always uses that key —
+  // regardless of the workspace's platform/BYOK mode. No silent fallback: if the key is revoked/invalid the agent stops.
+  if (pinnedCredentialId) {
+    const cred = await prisma.aiCredential.findFirst({ where: { id: pinnedCredentialId, workspaceId } });
+    if (!cred) throw new AiError("NOT_CONFIGURED", "The API key assigned to this agent no longer exists. Pick another key in Agent Studio.");
+    if (cred.status !== "ACTIVE") throw new AiError("NOT_CONFIGURED", `The API key assigned to this agent is ${cred.status.toLowerCase()}${cred.lastError ? ` (${cred.lastError})` : ""}. Replace it in Settings → AI.`);
+    const provider = cred.provider as Provider;
+    return { provider, apiKey: decrypt(cred.keyEnc), mode: "BYOK", credentialId: cred.id, defaultModel: platformDefaultModel(provider) };
+  }
   const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { aiCredentialMode: true, aiProvider: true, allowPlatformFallback: true } });
   const aiSetting = await prisma.platformSetting.findUnique({ where: { key: "ai" } });
   const platformDefault = ((aiSetting?.value as { defaultProvider?: Provider })?.defaultProvider ?? env().DEFAULT_AI_PROVIDER) as Provider;
   const provider = (preferredProvider ?? (ws.aiProvider as Provider | null) ?? platformDefault) as Provider;
 
   if (ws.aiCredentialMode === "BYOK") {
-    const cred = await prisma.aiCredential.findFirst({ where: { workspaceId, provider, status: "ACTIVE" }, orderBy: { createdAt: "desc" } });
+    const cred = await prisma.aiCredential.findFirst({ where: { workspaceId, provider, status: "ACTIVE", ownerUserId: null }, orderBy: { createdAt: "desc" } });
     if (cred) return { provider, apiKey: decrypt(cred.keyEnc), mode: "BYOK", credentialId: cred.id, defaultModel: platformDefaultModel(provider) };
     if (!ws.allowPlatformFallback) throw new AiError("NOT_CONFIGURED", `No active ${provider} API key for this workspace (BYOK). Add a key in Settings → AI, or ask the platform to allow fallback.`);
     log.warn("BYOK key unavailable; platform fallback is explicitly allowed", { workspaceId, provider });
@@ -140,18 +180,18 @@ export async function resolveCredential(workspaceId: string, preferredProvider?:
   const key = platformKey(provider);
   if (!key) {
     // try any configured platform provider
-    for (const p of ["openai", "gemini", "deepseek"] as Provider[]) {
+    for (const p of PROVIDERS) {
       const k = platformKey(p);
       if (k) return { provider: p, apiKey: k, mode: "PLATFORM", defaultModel: platformDefaultModel(p) };
     }
-    throw new AiError("NOT_CONFIGURED", "No AI provider is configured on this server (set OPENAI_API_KEY, GEMINI_API_KEY or DEEPSEEK_API_KEY).");
+    throw new AiError("NOT_CONFIGURED", "No AI provider is configured on this server (set OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY or DEEPSEEK_API_KEY).");
   }
   return { provider, apiKey: key, mode: "PLATFORM", defaultModel: platformDefaultModel(provider) };
 }
 
 // ───────────────────────────── Metered completion ─────────────────────────────
 
-export type MeteredInput = CompletionRequest & { workspaceId: string; purpose: "CLASSIFY" | "REPLY" | "TEST" | "EVAL" | "MESSENGER"; provider?: Provider; agentId?: string | null; agentVersionId?: string | null; ref?: { type: string; id: string } };
+export type MeteredInput = CompletionRequest & { workspaceId: string; purpose: "CLASSIFY" | "REPLY" | "TEST" | "EVAL" | "MESSENGER"; provider?: Provider; credentialId?: string | null; agentId?: string | null; agentVersionId?: string | null; ref?: { type: string; id: string } };
 
 /**
  * The only entry point application code uses to talk to an LLM:
@@ -159,7 +199,7 @@ export type MeteredInput = CompletionRequest & { workspaceId: string; purpose: "
  *  4) settle usage counters  5) record AiUsage row (success or failure)  6) platform budget guard.
  */
 export async function complete(input: MeteredInput): Promise<CompletionResult> {
-  const cred = await resolveCredential(input.workspaceId, input.provider);
+  const cred = await resolveCredential(input.workspaceId, input.provider, input.credentialId);
   const model = input.model && PROVIDER_MODELS[cred.provider].includes(input.model) ? input.model : cred.defaultModel;
 
   if (cred.mode === "PLATFORM") {
@@ -202,7 +242,7 @@ export async function verifyApiKey(provider: Provider, apiKey: string) {
 }
 
 export function assertProvider(p: string): Provider {
-  if (p === "openai" || p === "gemini" || p === "deepseek") return p;
+  if ((PROVIDERS as string[]).includes(p)) return p as Provider;
   throw Errors.badRequest("Unknown AI provider");
 }
 

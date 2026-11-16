@@ -7,7 +7,8 @@ import { api, ApiError } from "@/lib/api";
 import { formatDate, timeAgo } from "@/lib/utils";
 
 type WsSettings = { workspace: { id: string; slug: string; name: string; type: string; status: string; timezone: string; defaultLocale: string; businessProfile: Record<string, string>; emergencyPause: boolean; aiCredentialMode: string }; role: string | null; permissions: string[] };
-type Creds = { mode: string; provider: string | null; credentials: { id: string; provider: string; label: string; keyLast4: string; status: string; lastVerifiedAt: string | null; lastError: string | null }[]; platformProviders: string[]; allowPlatformFallback: boolean };
+type Creds = { mode: string; provider: string | null; canManageWorkspaceKeys: boolean; credentials: { id: string; provider: string; label: string; keyLast4: string; status: string; lastVerifiedAt: string | null; lastError: string | null; scope: "WORKSPACE" | "PERSONAL" }[]; platformProviders: string[]; allowPlatformFallback: boolean };
+const PROVIDER_OPTIONS = [["openai", "OpenAI (GPT)"], ["anthropic", "Anthropic (Claude)"], ["gemini", "Google Gemini"], ["deepseek", "DeepSeek"]] as const;
 
 export default function SettingsPage() {
   const { can, user } = useWorkspace();
@@ -18,7 +19,7 @@ export default function SettingsPage() {
       <PageHeader title="Settings" description="Business profile, AI providers, security and audit history." />
       <Tabs value={tab} onChange={setTab} items={[{ value: "business", label: "Business" }, { value: "ai", label: "AI providers" }, { value: "replies", label: "Saved replies" }, { value: "security", label: "Security" }, ...(can("audit.view") ? [{ value: "audit" as const, label: "Audit log" }] : [])]} />
       {tab === "business" ? (s.data ? <BusinessForm data={s.data} canEdit={can("settings.manage")} onSaved={() => s.refresh()} /> : <LoadingBlock />) : null}
-      {tab === "ai" ? <AiSettings canEdit={can("ai.credentials")} /> : null}
+      {tab === "ai" ? <AiSettings canEdit={can("ai.credentials") || can("agents.configure")} /> : null}
       {tab === "replies" ? <SavedReplies /> : null}
       {tab === "security" ? <Security canManage={can("settings.manage")} userEmail={user.email} /> : null}
       {tab === "audit" ? <AuditLog /> : null}
@@ -81,15 +82,18 @@ function AiSettings({ canEdit }: { canEdit: boolean }) {
   const [provider, setProvider] = useState("openai");
   const [key, setKey] = useState("");
   const [label, setLabel] = useState("");
+  const [scope, setScope] = useState<"WORKSPACE" | "PERSONAL">("WORKSPACE");
   const [saving, setSaving] = useState(false);
-  if (!canEdit) return <Alert tone="info">Only owners and admins can manage AI provider keys.</Alert>;
+  if (!canEdit) return <Alert tone="info">Only members who can configure agents may add AI provider keys.</Alert>;
   if (!d.data) return <LoadingBlock />;
   const x = d.data;
+  const manage = x.canManageWorkspaceKeys;
+  const effectiveScope = manage ? scope : "PERSONAL";
   async function addKey() {
     setSaving(true);
     try {
-      await api.post("/api/v1/ai/credentials", { provider, apiKey: key, label });
-      toast.success("API key verified and stored encrypted");
+      await api.post("/api/v1/ai/credentials", { provider, apiKey: key, label, scope: effectiveScope });
+      toast.success("API key verified and stored encrypted", effectiveScope === "PERSONAL" ? "Pin your agents to this key in Agent Studio → “Brain / API key”." : undefined);
       setKey("");
       d.refresh();
     } catch (err) {
@@ -109,18 +113,18 @@ function AiSettings({ canEdit }: { canEdit: boolean }) {
   };
   return (
     <div className="grid gap-5 lg:grid-cols-2">
-      <Card>
+      {manage ? <Card>
         <CardHeader title="Credential mode" description="Platform-managed AI counts toward your plan's AI allowance. Bring Your Own Key bills your provider account directly; requests are still counted and rate-limited." />
         <div className="grid gap-2">
           {([["PLATFORM", "Platform-managed", x.platformProviders.length ? `Available: ${x.platformProviders.join(", ")}` : "No platform providers configured on this server"], ["BYOK", "Bring Your Own Key", x.credentials.filter((c) => c.status === "ACTIVE").length ? "Using your keys below" : "Add a key first"]] as const).map(([v, l, h]) => <button key={v} onClick={() => setMode(v)} className={`rounded-sm border p-3 text-left ${x.mode === v ? "border-primary bg-primary-soft/40" : "border-border hover:bg-surface-2"}`}><div className="text-sm font-medium text-text">{l}</div><div className="text-[12px] text-text-2">{h}</div></button>)}
         </div>
-        <Field label="Preferred provider" hint="Agents can override this per version."><Select value={x.provider ?? ""} onChange={(e) => api.patch("/api/v1/ai/credentials", { provider: e.target.value || null }).then(() => d.refresh())}><option value="">Platform default</option><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="deepseek">DeepSeek</option></Select></Field>
+        <Field label="Preferred provider" hint="Agents can override this per version."><Select value={x.provider ?? ""} onChange={(e) => api.patch("/api/v1/ai/credentials", { provider: e.target.value || null }).then(() => d.refresh())}><option value="">Platform default</option>{PROVIDER_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></Field>
         {x.mode === "BYOK" ? <Alert tone="info" className="mt-3">{x.allowPlatformFallback ? "If your key fails, the platform may temporarily cover requests (enabled by the platform admin)." : "If your key fails, AI processing pauses — it never silently falls back to platform credits."}</Alert> : null}
-      </Card>
+      </Card> : <Card><CardHeader title="Your personal AI key" description="Add your own OpenAI, Claude, Gemini or DeepSeek key and pin the agents you create to it. Only you can see or use it; usage is billed to your provider account." /><p className="text-sm text-text-2">Workspace-wide keys and the platform/BYOK mode are managed by owners and admins.</p></Card>}
       <Card>
-        <CardHeader title="Your API keys" description="Keys are verified with a tiny test request before being stored with authenticated encryption. Only the last 4 characters are shown." />
-        <ul className="mb-4 divide-y divide-border text-sm">{x.credentials.map((c) => <li key={c.id} className="flex items-center justify-between py-2"><span><span className="font-medium text-text">{c.provider}</span> <span className="text-text-2">…{c.keyLast4}{c.label ? ` · ${c.label}` : ""}</span>{c.lastError ? <span className="block text-[12px] text-danger">{c.lastError}</span> : null}</span><span className="flex items-center gap-2"><Badge tone={c.status === "ACTIVE" ? "success" : "danger"}>{c.status.toLowerCase()}</Badge>{c.status === "ACTIVE" ? <Button size="sm" variant="ghost" className="text-danger" onClick={() => api.delete(`/api/v1/ai/credentials/${c.id}`).then(() => d.refresh())}>Revoke</Button> : null}</span></li>)}{!x.credentials.length ? <li className="py-2 text-text-3">No keys added.</li> : null}</ul>
-        <div className="grid gap-3 sm:grid-cols-3"><Field label="Provider"><Select value={provider} onChange={(e) => setProvider(e.target.value)}><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="deepseek">DeepSeek</option></Select></Field><div className="sm:col-span-2"><Field label="API key"><Input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-…" autoComplete="off" /></Field></div><div className="sm:col-span-2"><Field label="Label"><Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Finance team key" /></Field></div><div className="flex items-end"><Button onClick={addKey} loading={saving} disabled={key.length < 10} className="w-full">Verify & add</Button></div></div>
+        <CardHeader title="API keys" description="Keys are verified with a tiny test request before being stored with authenticated encryption. Only the last 4 characters are shown. Personal keys are visible only to their owner; agents pinned to a key always use it (no silent fallback)." />
+        <ul className="mb-4 divide-y divide-border text-sm">{x.credentials.map((c) => <li key={c.id} className="flex items-center justify-between py-2"><span><span className="font-medium text-text">{PROVIDER_OPTIONS.find(([v]) => v === c.provider)?.[1] ?? c.provider}</span> <span className="text-text-2">…{c.keyLast4}{c.label ? ` · ${c.label}` : ""}</span> <Badge tone={c.scope === "PERSONAL" ? "primary" : "outline"}>{c.scope === "PERSONAL" ? "personal" : "workspace"}</Badge>{c.lastError ? <span className="block text-[12px] text-danger">{c.lastError}</span> : null}</span><span className="flex items-center gap-2"><Badge tone={c.status === "ACTIVE" ? "success" : "danger"}>{c.status.toLowerCase()}</Badge>{c.status === "ACTIVE" ? <Button size="sm" variant="ghost" className="text-danger" onClick={() => api.delete(`/api/v1/ai/credentials/${c.id}`).then(() => d.refresh())}>Revoke</Button> : null}</span></li>)}{!x.credentials.length ? <li className="py-2 text-text-3">No keys added.</li> : null}</ul>
+        <div className="grid gap-3 sm:grid-cols-3"><Field label="Provider"><Select value={provider} onChange={(e) => setProvider(e.target.value)}>{PROVIDER_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></Field>{manage ? <Field label="Key belongs to"><Select value={scope} onChange={(e) => setScope(e.target.value as "WORKSPACE" | "PERSONAL")}><option value="WORKSPACE">The whole workspace</option><option value="PERSONAL">Me (personal key)</option></Select></Field> : null}<div className="sm:col-span-2"><Field label="API key"><Input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-…" autoComplete="off" /></Field></div><div className="sm:col-span-2"><Field label="Label"><Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Finance team key" /></Field></div><div className="flex items-end"><Button onClick={addKey} loading={saving} disabled={key.length < 10} className="w-full">Verify & add</Button></div></div>
       </Card>
     </div>
   );

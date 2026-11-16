@@ -23,12 +23,43 @@ http.createServer((req, res) => {
   req.on("end", () => {
     log.push(`${req.method} ${req.url}`);
     const json = (o, code = 200) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
+    // Reviewer rulings in the system prompt: the real model matches by meaning; the mock matches when the new
+    // comment shares at least half of a ruling's words (good enough to exercise the pipeline end-to-end).
+    const matchRuling = (sys, comment) => {
+      const words = (t) => new Set(t.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, " ").split(/\s+/).filter((w) => w.length > 1));
+      const cw = words(comment);
+      for (const line of sys.split("\n")) {
+        const m = line.match(/^- (\S+) \| (ALWAYS HIDE|NEVER HIDE) \| [^|]+ \| "([\s\S]*?)"(?: \(reviewer note|$)/);
+        if (!m) continue;
+        const rw = words(m[3]);
+        let shared = 0;
+        for (const w of rw) if (cw.has(w)) shared++;
+        if (rw.size && shared / rw.size >= 0.5) return { id: m[1], decision: m[2] === "ALWAYS HIDE" ? "HIDE" : "KEEP" };
+      }
+      return null;
+    };
+    const answer = (sys, text) => {
+      const m = text.match(/"""([\s\S]*?)"""/);
+      if (!m) return { reply: "ধন্যবাদ! আমরা শীঘ্রই আপনার সাথে যোগাযোগ করব।", confidence: 0.85, escalate: false, reason: "mock" };
+      const out = classify(m[1]);
+      const ruling = matchRuling(sys, m[1]);
+      if (ruling) { out.precedent_match = ruling.id; out.recommended_action = ruling.decision === "HIDE" ? "HIDE" : "KEEP"; out.reasoning += ` Matches ruling ${ruling.id}.`; }
+      else out.precedent_match = null;
+      return out;
+    };
     if (req.url.startsWith("/v1/chat/completions")) {
       const msgs = JSON.parse(body).messages;
-      const text = msgs[msgs.length - 1].content;
-      const m = text.match(/"""([\s\S]*?)"""/);
-      const out = m ? classify(m[1]) : { reply: "ধন্যবাদ! আমরা শীঘ্রই আপনার সাথে যোগাযোগ করব।", confidence: 0.85, escalate: false, reason: "mock" };
+      const sys = msgs.filter((x) => x.role === "system").map((x) => x.content).join("\n");
+      const out = answer(sys, msgs[msgs.length - 1].content);
       return json({ choices: [{ message: { content: JSON.stringify(out) } }], usage: { prompt_tokens: 600, completion_tokens: 90 }, model: "gpt-4.1-mini" });
+    }
+    if (req.url.startsWith("/v1/messages")) {
+      // Anthropic Messages API mock (BYOK Claude keys). Honour the "{" prefill convention.
+      const b = JSON.parse(body);
+      if (!req.headers["x-api-key"]) return json({ type: "error", error: { type: "authentication_error", message: "missing x-api-key" } }, 401);
+      const user = (b.messages || []).find((x) => x.role === "user")?.content ?? "";
+      const out = answer(b.system ?? "", user);
+      return json({ id: "msg_mock", type: "message", role: "assistant", model: b.model, content: [{ type: "text", text: JSON.stringify(out).slice(1) }], usage: { input_tokens: 600, output_tokens: 90 } });
     }
     if (req.url === "/__log") return json(log);
     // Graph API mock

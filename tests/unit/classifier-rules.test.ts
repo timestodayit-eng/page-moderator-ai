@@ -4,7 +4,7 @@ import { computeMetrics } from "@/server/agents/evaluation";
 import { readFileSync } from "node:fs";
 
 const base: Signals = { urls: [], hasUrl: false, hasPhone: false, hasEmail: false, repeatedByAuthor: 0, authorCommentsLastHour: 0, isReply: false, isPageOwnComment: false, length: 20, script: "bengali" };
-const c = (o: Partial<Classification>): Classification => ({ language: "bn", category: "NEUTRAL", sentiment: "neutral", confidence: 0.9, risk_score: 0.1, reasoning: "", recommended_action: "KEEP", intent: "", suggested_reply: null, targets_other_commenter: false, contains_contact_info: false, negative_vibe: false, slang_detected: false, ...o });
+const c = (o: Partial<Classification>): Classification => ({ language: "bn", category: "NEUTRAL", sentiment: "neutral", confidence: 0.9, risk_score: 0.1, reasoning: "", recommended_action: "KEEP", intent: "", suggested_reply: null, targets_other_commenter: false, contains_contact_info: false, negative_vibe: false, slang_detected: false, precedent_match: null, ...o });
 
 describe("deterministic safety rules", () => {
   it("never allows HIDE for protected categories; negative sentiment may be HIDE (policy decides execution)", () => {

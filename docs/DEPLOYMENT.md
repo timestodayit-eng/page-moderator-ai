@@ -27,7 +27,7 @@ APP_URL=https://app.yourdomain.com
 POSTGRES_PASSWORD=<strong random>
 ENCRYPTION_KEY=<openssl rand -base64 32>
 META_APP_ID=… META_APP_SECRET=… META_WEBHOOK_VERIFY_TOKEN=<openssl rand -hex 16>
-OPENAI_API_KEY=… (or GEMINI/DEEPSEEK)
+OPENAI_API_KEY=… (or ANTHROPIC/GEMINI/DEEPSEEK)
 EMAIL_PROVIDER=smtp SMTP_HOST=… SMTP_USER=… SMTP_PASS=… EMAIL_FROM="Page Moderator AI <no-reply@yourdomain.com>"
 META_AUTOMATION_ENABLED=false   # flip to true only after shadow-mode review
 ```

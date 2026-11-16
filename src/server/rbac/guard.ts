@@ -3,6 +3,13 @@ import { prisma } from "../db";
 import { Errors } from "../errors";
 import { ALL_PERMISSIONS, type PermissionKey } from "./permissions";
 
+export type MemberAccess = {
+  pageAccess: "ALL" | "ASSIGNED";
+  allowedPageIds: string[];
+  maxPages: number | null;
+  maxAgents: number | null;
+};
+
 export type WorkspaceContext = {
   user: User;
   workspace: Workspace;
@@ -10,7 +17,28 @@ export type WorkspaceContext = {
   permissions: Set<PermissionKey>;
   rank: number;
   viaPlatform: boolean; // access granted through platform role rather than membership
+  access: MemberAccess; // per-member Page/agent limits set by the owner (role permissions still apply on top)
 };
+
+export const UNLIMITED_ACCESS: MemberAccess = { pageAccess: "ALL", allowedPageIds: [], maxPages: null, maxAgents: null };
+
+export function memberAccessOf(m: { pageAccess: string; allowedPageIds: string[]; maxPages: number | null; maxAgents: number | null } | null | undefined): MemberAccess {
+  if (!m) return UNLIMITED_ACCESS;
+  return { pageAccess: m.pageAccess === "ASSIGNED" ? "ASSIGNED" : "ALL", allowedPageIds: m.allowedPageIds ?? [], maxPages: m.maxPages ?? null, maxAgents: m.maxAgents ?? null };
+}
+
+/** Prisma filter restricting Page-scoped rows to the Pages this member may handle (null = no restriction). */
+export function pageScope(ctx: WorkspaceContext): { in: string[] } | null {
+  return ctx.access.pageAccess === "ASSIGNED" ? { in: ctx.access.allowedPageIds } : null;
+}
+
+export function canAccessPage(ctx: WorkspaceContext, pageId: string) {
+  return ctx.access.pageAccess === "ALL" || ctx.access.allowedPageIds.includes(pageId);
+}
+
+export function assertPageAccess(ctx: WorkspaceContext, pageId: string) {
+  if (!canAccessPage(ctx, pageId)) throw Errors.notFound("Page"); // do not reveal Pages outside the member's assignment
+}
 
 // Super Admins can oversee workspaces read-only without membership. Private Messenger content
 // is NOT included — it requires an approved, audited SupportAccessGrant.
@@ -53,7 +81,8 @@ export async function resolveWorkspaceContext(user: User, workspaceRef: string):
   if (workspace.status === "SUSPENDED" || workspace.status === "PENDING") {
     permissions = new Set([...permissions].filter((p) => SUSPENDED_ALLOWED.includes(p)));
   }
-  return { user, workspace, membership, permissions, rank, viaPlatform };
+  const access = membership && membership.status === "ACTIVE" && !viaPlatform ? memberAccessOf(membership) : UNLIMITED_ACCESS;
+  return { user, workspace, membership, permissions, rank, viaPlatform, access };
 }
 
 export function can(ctx: WorkspaceContext, permission: PermissionKey) {

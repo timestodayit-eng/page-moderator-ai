@@ -7,9 +7,9 @@ import { useWorkspace } from "@/components/app/workspace-context";
 import { useApi } from "@/lib/hooks";
 import { api, ApiError } from "@/lib/api";
 import { formatDate, formatMicroUsd, timeAgo } from "@/lib/utils";
-import { CategoryBadge, Confidence, DecisionBadge } from "@/components/app/moderation-shared";
+import { ALWAYS_OFF, AlwaysRuling, CategoryBadge, Confidence, DecisionBadge, PrecedentBadge, type AlwaysState } from "@/components/app/moderation-shared";
 
-type Detail = { id: string; message: string; authorName: string | null; authorFbId: string | null; createdTime: string; permalink: string | null; isHidden: boolean; status: string; lastError: string | null; authorCommentCount: number; page: { id: string; name: string; status: string }; classifications: { id: string; language: string; category: string; sentiment: string; reasoning: string; confidence: number; riskScore: number; recommendedAction: string; suggestedReply: string | null; provider: string; model: string; policyVersion: string; latencyMs: number; tokensIn: number; tokensOut: number; costMicroUsd: number; createdAt: string; signals: Record<string, unknown> }[]; decisions: { id: string; decision: string; reasons: string[]; autoExecuted: boolean; reviewStatus: string; reviewNote: string | null; feedback: string | null; correctedCategory: string | null; createdAt: string }[]; actions: { id: string; type: string; actorType: string; status: string; note: string | null; createdAt: string; outboundActionId: string | null }[]; outbound: { id: string; status: string; attempts: number; lastError: string | null; externalId: string | null; completedAt: string | null }[] };
+type Detail = { id: string; message: string; authorName: string | null; authorFbId: string | null; createdTime: string; permalink: string | null; isHidden: boolean; status: string; lastError: string | null; authorCommentCount: number; page: { id: string; name: string; status: string }; classifications: { id: string; language: string; category: string; sentiment: string; reasoning: string; confidence: number; riskScore: number; recommendedAction: string; suggestedReply: string | null; provider: string; model: string; policyVersion: string; latencyMs: number; tokensIn: number; tokensOut: number; costMicroUsd: number; createdAt: string; signals: Record<string, unknown>; precedentId?: string | null }[]; decisions: { id: string; decision: string; reasons: string[]; autoExecuted: boolean; reviewStatus: string; reviewNote: string | null; feedback: string | null; correctedCategory: string | null; createdAt: string }[]; actions: { id: string; type: string; actorType: string; status: string; note: string | null; createdAt: string; outboundActionId: string | null }[]; outbound: { id: string; status: string; attempts: number; lastError: string | null; externalId: string | null; completedAt: string | null }[] };
 
 export default function CommentDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -18,6 +18,8 @@ export default function CommentDetail({ params }: { params: Promise<{ id: string
   const d = useApi<Detail>(`/api/v1/comments/${id}`);
   const [reply, setReply] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [always, setAlways] = useState<AlwaysState>(ALWAYS_OFF);
+  const alwaysBody = always.always ? { always: true, alwaysScope: always.alwaysScope } : {};
   const c = d.data?.classifications[0];
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     setBusy(true);
@@ -40,15 +42,16 @@ export default function CommentDetail({ params }: { params: Promise<{ id: string
         {x.permalink ? <a href={x.permalink} target="_blank" rel="noreferrer"><Button variant="outline"><ExternalLink className="h-4 w-4" /> Open on Facebook</Button></a> : null}
         {can("moderation.approve") ? <Button variant="outline" disabled={busy} onClick={() => act(() => api.post(`/api/v1/comments/${id}/analyze`), "Re-analysis queued")}><RefreshCw className="h-4 w-4" /> Re-analyse</Button> : null}
         {can("crm.access") ? <Button variant="outline" disabled={busy} onClick={() => act(() => api.post("/api/v1/leads/from-source", { commentId: id }), "Lead created")}><UserPlus className="h-4 w-4" /> Create lead</Button> : null}
-        {x.isHidden ? (can("comments.unhide") ? <Button disabled={busy} onClick={() => act(() => api.post(`/api/v1/comments/${id}/unhide`, {}), "Unhide requested")}><Eye className="h-4 w-4" /> Unhide</Button> : null) : (can("comments.hide") ? <Button variant="danger" disabled={busy} onClick={() => act(() => api.post(`/api/v1/comments/${id}/hide`, {}), "Hide requested")}><EyeOff className="h-4 w-4" /> Hide</Button> : null)}
+        {x.isHidden ? (can("comments.unhide") ? <Button disabled={busy} onClick={() => act(() => api.post(`/api/v1/comments/${id}/unhide`, alwaysBody), always.always ? "Unhide requested · ruling saved" : "Unhide requested")}><Eye className="h-4 w-4" /> Unhide</Button> : null) : (can("comments.hide") ? <Button variant="danger" disabled={busy} onClick={() => act(() => api.post(`/api/v1/comments/${id}/hide`, alwaysBody), always.always ? "Hide requested · ruling saved" : "Hide requested")}><EyeOff className="h-4 w-4" /> Hide</Button> : null)}
         {can("comments.reply") ? <Button disabled={busy} onClick={() => setReply(c?.suggestedReply ?? "")}><MessageSquare className="h-4 w-4" /> Reply</Button> : null}
       </>} />
+      {can("comments.hide") || can("comments.unhide") || can("moderation.approve") ? <AlwaysRuling value={always} onChange={setAlways} decision={x.isHidden ? "KEEP" : "HIDE"} /> : null}
       {x.page.status !== "CONNECTED" ? <Alert tone="warning">This Page is {x.page.status.toLowerCase().replace("_", " ")} — actions are disabled until it is reconnected.</Alert> : null}
       {x.status === "FAILED" ? <Alert tone="danger" title="Analysis failed">{x.lastError}</Alert> : null}
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="space-y-5 lg:col-span-2">
           <Card>
-            <div className="flex flex-wrap items-center gap-2"><CategoryBadge category={c?.category} /><Confidence value={c?.confidence} />{c ? <Badge tone="outline">{c.sentiment}</Badge> : null}{c ? <Badge tone="outline">{c.language}</Badge> : null}{x.isHidden ? <Badge tone="danger">Hidden on Facebook</Badge> : <Badge tone="success">Visible</Badge>}</div>
+            <div className="flex flex-wrap items-center gap-2"><CategoryBadge category={c?.category} /><Confidence value={c?.confidence} /><PrecedentBadge precedentId={c?.precedentId} />{c ? <Badge tone="outline">{c.sentiment}</Badge> : null}{c ? <Badge tone="outline">{c.language}</Badge> : null}{x.isHidden ? <Badge tone="danger">Hidden on Facebook</Badge> : <Badge tone="success">Visible</Badge>}</div>
             <p className="mt-4 whitespace-pre-wrap font-bengali text-[16px] leading-relaxed text-text">{x.message}</p>
             {c ? <div className="mt-4 rounded-sm bg-surface-2 p-4 text-sm text-text-2"><div className="font-medium text-text">AI reasoning</div><p className="mt-1">{c.reasoning}</p><div className="mt-2 text-[12px] text-text-3">Recommended: {c.recommendedAction} · risk {Math.round(c.riskScore * 100)}% · {c.provider}/{c.model} · policy {c.policyVersion} · {c.latencyMs}ms · {c.tokensIn + c.tokensOut} tokens · {formatMicroUsd(c.costMicroUsd)}</div></div> : null}
             {c?.suggestedReply ? <div className="mt-3 rounded-sm border border-primary/30 bg-primary-soft/40 p-4 text-sm"><div className="font-medium text-primary">Suggested reply</div><p className="mt-1 font-bengali text-text">{c.suggestedReply}</p></div> : null}
@@ -61,7 +64,7 @@ export default function CommentDetail({ params }: { params: Promise<{ id: string
                   <div className="flex flex-wrap items-center gap-2"><DecisionBadge decision={dec.decision} autoExecuted={dec.autoExecuted} reviewStatus={dec.reviewStatus} />{dec.feedback ? <Badge tone="outline">{dec.feedback.replace("_", " ").toLowerCase()}</Badge> : null}{dec.correctedCategory ? <Badge tone="primary">→ {dec.correctedCategory}</Badge> : null}<span className="ml-auto text-[12px] text-text-3">{timeAgo(dec.createdAt)}</span></div>
                   <div className="mt-1.5 text-[12px] text-text-3">{dec.reasons.join(" · ")}</div>
                   {dec.reviewNote ? <div className="mt-1 text-[13px] text-text-2">Note: {dec.reviewNote}</div> : null}
-                  {dec.reviewStatus === "PENDING" && can("moderation.approve") ? <div className="mt-2 flex gap-2"><Button size="sm" disabled={busy} onClick={() => act(() => api.post(`/api/v1/moderation/decisions/${dec.id}`, { outcome: "APPROVE" }), "Approved")}>Approve</Button><Button size="sm" variant="outline" disabled={busy} onClick={() => act(() => api.post(`/api/v1/moderation/decisions/${dec.id}`, { outcome: "REJECT" }), "Rejected")}>Reject</Button></div> : null}
+                  {dec.reviewStatus === "PENDING" && can("moderation.approve") ? <div className="mt-2 flex gap-2"><Button size="sm" disabled={busy} onClick={() => act(() => api.post(`/api/v1/moderation/decisions/${dec.id}`, { outcome: "APPROVE", ...alwaysBody }), "Approved")}>{dec.decision === "HIDE" ? "Approve hide" : dec.decision === "REPLY" ? "Approve reply" : "Hide"}</Button><Button size="sm" variant="outline" disabled={busy} onClick={() => act(() => api.post(`/api/v1/moderation/decisions/${dec.id}`, { outcome: "REJECT", ...alwaysBody }), "Rejected")}>Keep visible</Button></div> : null}
                 </li>
               ))}
               {x.actions.map((a) => {

@@ -2,7 +2,7 @@ import type { ConversationStatus, Prisma } from "@/generated/prisma/client";
 import { prisma } from "../db";
 import { Errors } from "../errors";
 import { audit } from "../audit";
-import type { WorkspaceContext } from "../rbac/guard";
+import { pageScope, type WorkspaceContext } from "../rbac/guard";
 import { requestAction } from "../actions/outbound";
 import { complete } from "../ai/gateway";
 import { retrieveKnowledge } from "../agents/knowledge";
@@ -22,7 +22,9 @@ const LIFECYCLE: Record<ConversationStatus, ConversationStatus[]> = {
 };
 
 function scope(ctx: WorkspaceContext): Prisma.ConversationWhereInput {
-  return ctx.permissions.has("inbox.all") ? { workspaceId: ctx.workspace.id } : { workspaceId: ctx.workspace.id, OR: [{ assignedToId: ctx.user.id }, { assignedToId: null, status: { in: ["NEW", "OPEN"] } }] };
+  const pages = pageScope(ctx);
+  const base: Prisma.ConversationWhereInput = { workspaceId: ctx.workspace.id, ...(pages ? { pageId: pages } : {}) };
+  return ctx.permissions.has("inbox.all") ? base : { ...base, OR: [{ assignedToId: ctx.user.id }, { assignedToId: null, status: { in: ["NEW", "OPEN"] } }] };
 }
 
 export async function listConversations(ctx: WorkspaceContext, q: { status?: string; pageId?: string; assigned?: "me" | "unassigned" | string; tag?: string; priority?: string; search?: string; unread?: boolean; skip: number; take: number }) {
@@ -147,7 +149,7 @@ export async function suggestReply(ctx: WorkspaceContext, id: string) {
     knowledge.length ? `Approved knowledge:\n${knowledge.map((k, i) => `[${i + 1}] ${k.content}`).join("\n")}` : "No approved knowledge available.",
     `Return JSON: {"reply": string, "confidence": number 0-1, "escalate": boolean, "reason": string}`,
   ].filter(Boolean).join("\n\n");
-  const res = await complete({ workspaceId: ctx.workspace.id, purpose: "MESSENGER", provider: agent?.provider, model: agent?.model, temperature: agent?.temperature ?? 0.4, json: true, maxTokens: 500, agentId: agent?.id, agentVersionId: agent?.versionId, ref: { type: "Conversation", id }, messages: [{ role: "system", content: sys }, { role: "user", content: `Conversation so far:\n${transcript}\n\nDraft the business's next reply.` }] });
+  const res = await complete({ workspaceId: ctx.workspace.id, purpose: "MESSENGER", provider: agent?.provider, credentialId: agent?.credentialId, model: agent?.model, temperature: agent?.temperature ?? 0.4, json: true, maxTokens: 500, agentId: agent?.id, agentVersionId: agent?.versionId, ref: { type: "Conversation", id }, messages: [{ role: "system", content: sys }, { role: "user", content: `Conversation so far:\n${transcript}\n\nDraft the business's next reply.` }] });
   const { parseJsonObject } = await import("../ai/gateway");
   const out = parseJsonObject<{ reply: string; confidence: number; escalate: boolean; reason: string }>(res.text);
   return { ...out, model: res.model, provider: res.provider, knowledgeUsed: knowledge.length };

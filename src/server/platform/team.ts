@@ -9,6 +9,41 @@ import { enforceLimit } from "../billing/usage";
 
 const INVITE_TTL_DAYS = 7;
 
+export type AccessInput = { pageAccess?: "ALL" | "ASSIGNED"; allowedPageIds?: string[]; maxPages?: number | null; maxAgents?: number | null };
+
+/** Validate per-member access limits: Pages must belong to the workspace; an actor cannot grant more than they hold. */
+async function normaliseAccess(ctx: WorkspaceContext, input: AccessInput | undefined, current?: { pageAccess: string; allowedPageIds: string[]; maxPages: number | null; maxAgents: number | null }) {
+  const pageAccess = input?.pageAccess ?? (current?.pageAccess as "ALL" | "ASSIGNED" | undefined) ?? "ALL";
+  let allowedPageIds = input?.allowedPageIds ?? current?.allowedPageIds ?? [];
+  const maxPages = input?.maxPages === undefined ? current?.maxPages ?? null : input.maxPages;
+  const maxAgents = input?.maxAgents === undefined ? current?.maxAgents ?? null : input.maxAgents;
+  if (allowedPageIds.length) {
+    const n = await prisma.connectedPage.count({ where: { id: { in: allowedPageIds }, workspaceId: ctx.workspace.id } });
+    if (n !== new Set(allowedPageIds).size) throw Errors.notFound("Page");
+    allowedPageIds = Array.from(new Set(allowedPageIds));
+  }
+  // Cannot hand out broader Page access than you hold yourself.
+  if (ctx.access.pageAccess === "ASSIGNED") {
+    if (pageAccess === "ALL") throw Errors.forbidden("You can only assign Pages you have access to");
+    const outside = allowedPageIds.filter((id) => !ctx.access.allowedPageIds.includes(id));
+    if (outside.length) throw Errors.forbidden("You can only assign Pages you have access to");
+  }
+  if (maxPages !== null && (maxPages < 0 || maxPages > 10_000)) throw Errors.badRequest("Invalid Page limit");
+  if (maxAgents !== null && (maxAgents < 0 || maxAgents > 10_000)) throw Errors.badRequest("Invalid agent limit");
+  return { pageAccess, allowedPageIds: pageAccess === "ASSIGNED" ? allowedPageIds : [], maxPages, maxAgents };
+}
+
+export async function updateMemberAccess(ctx: WorkspaceContext, membershipId: string, input: AccessInput, meta: { ip?: string | null }) {
+  const m = await prisma.membership.findFirst({ where: { id: membershipId, workspaceId: ctx.workspace.id }, include: { role: true } });
+  if (!m) throw Errors.notFound("Member");
+  assertCanManageMember(ctx, m.role.rank, m.userId);
+  if (m.role.key === "owner") throw Errors.forbidden("Owners always have full access");
+  const access = await normaliseAccess(ctx, input, m);
+  await prisma.membership.update({ where: { id: m.id }, data: access });
+  await audit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "member.access_updated", targetType: "Membership", targetId: m.id, ip: meta.ip, meta: { userId: m.userId, ...access } });
+  return access;
+}
+
 export async function listMembers(workspaceId: string) {
   const members = await prisma.membership.findMany({
     where: { workspaceId },
@@ -77,12 +112,13 @@ export async function deleteRole(ctx: WorkspaceContext, roleId: string, meta: { 
   });
 }
 
-export async function inviteMember(ctx: WorkspaceContext, input: { email: string; roleId: string }, meta: { ip?: string | null }) {
+export async function inviteMember(ctx: WorkspaceContext, input: { email: string; roleId: string; access?: AccessInput }, meta: { ip?: string | null }) {
   const email = input.email.trim().toLowerCase();
   const role = await prisma.role.findFirst({ where: { id: input.roleId, workspaceId: ctx.workspace.id } });
   if (!role) throw Errors.notFound("Role");
   const perms = [...(await loadRolePermissions(role.id))];
   assertCanAssignRole(ctx, { key: role.key, rank: role.rank, permissions: perms });
+  const access = role.key === "owner" ? { pageAccess: "ALL" as const, allowedPageIds: [], maxPages: null, maxAgents: null } : await normaliseAccess(ctx, input.access);
 
   const existingUser = await prisma.user.findUnique({ where: { email }, select: { id: true } });
   if (existingUser) {
@@ -97,7 +133,7 @@ export async function inviteMember(ctx: WorkspaceContext, input: { email: string
   const invitation = await prisma.$transaction(async (tx) => {
     await tx.invitation.updateMany({ where: { workspaceId: ctx.workspace.id, email, acceptedAt: null, revokedAt: null }, data: { revokedAt: new Date() } });
     const inv = await tx.invitation.create({
-      data: { workspaceId: ctx.workspace.id, email, roleId: role.id, tokenHash: sha256(raw), invitedById: ctx.user.id, expiresAt: new Date(Date.now() + INVITE_TTL_DAYS * 86_400_000) },
+      data: { workspaceId: ctx.workspace.id, email, roleId: role.id, tokenHash: sha256(raw), invitedById: ctx.user.id, expiresAt: new Date(Date.now() + INVITE_TTL_DAYS * 86_400_000), ...access },
     });
     await queueEmail(
       {
@@ -110,7 +146,7 @@ export async function inviteMember(ctx: WorkspaceContext, input: { email: string
       },
       tx,
     );
-    await audit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "member.invited", targetType: "Invitation", targetId: inv.id, ip: meta.ip, meta: { email, role: role.key } }, tx);
+    await audit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "member.invited", targetType: "Invitation", targetId: inv.id, ip: meta.ip, meta: { email, role: role.key, ...access } }, tx);
     return inv;
   });
   return invitation;
@@ -163,10 +199,11 @@ export async function acceptInvitation(rawToken: string, actor: { userId?: strin
     }
     const consumed = await tx.invitation.updateMany({ where: { id: inv.id, acceptedAt: null }, data: { acceptedAt: new Date(), acceptedUserId: userId } });
     if (consumed.count === 0) throw Errors.conflict("Invitation already accepted");
+    const access = { pageAccess: inv.pageAccess, allowedPageIds: inv.allowedPageIds, maxPages: inv.maxPages, maxAgents: inv.maxAgents };
     await tx.membership.upsert({
       where: { userId_workspaceId: { userId, workspaceId: inv.workspaceId } },
-      update: { roleId: inv.roleId, status: "ACTIVE" },
-      create: { userId, workspaceId: inv.workspaceId, roleId: inv.roleId },
+      update: { roleId: inv.roleId, status: "ACTIVE", ...access },
+      create: { userId, workspaceId: inv.workspaceId, roleId: inv.roleId, ...access },
     });
     await audit({ workspaceId: inv.workspaceId, actorUserId: userId, action: "member.joined", targetType: "Membership", targetId: userId, ip: meta.ip, userAgent: meta.userAgent, meta: { role: inv.role.key, viaInvitation: inv.id } }, tx);
     return { userId, createdUser, workspaceSlug: inv.workspace.slug };

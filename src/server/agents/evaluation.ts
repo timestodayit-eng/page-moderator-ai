@@ -19,7 +19,7 @@ export async function runEvaluation(evaluationId: string) {
   }
   const examples = await prisma.trainingExample.findMany({ where: { workspaceId: ev.workspaceId, kind: "MODERATION", status: "ACTIVE", category: { not: null }, OR: [{ agentId: ev.agentId }, { agentId: null }] }, take: 200 });
   const details: { exampleId: string; text: string; expected: string; predicted: string; expectedDecision: string | null; predictedAction: string; confidence: number; correct: boolean }[] = [];
-  const agent = { id: ev.agentId, versionId: version.id, instructions: version.instructions, provider: version.provider as Provider, model: version.model, temperature: version.temperature, languages: version.languages, tone: version.tone, safetyRules: version.safetyRules, knowledgeSourceIds: version.knowledgeSourceIds };
+  const agent = { id: ev.agentId, versionId: version.id, instructions: version.instructions, provider: version.provider as Provider, model: version.model, credentialId: version.credentialId, temperature: version.temperature, languages: version.languages, tone: version.tone, safetyRules: version.safetyRules, knowledgeSourceIds: version.knowledgeSourceIds };
   const page = await prisma.connectedPage.findFirst({ where: { workspaceId: ev.workspaceId }, select: { id: true, fbPageId: true } });
   let failures = 0;
   for (const ex of examples) {

@@ -4,12 +4,13 @@ import { Play, History, FlaskConical, Power, Archive } from "lucide-react";
 import { Alert, Badge, Button, Card, CardHeader, Field, Input, KeyValue, LoadingBlock, PageHeader, Select, Tabs, Textarea, useToast } from "@/components/ui";
 import { useWorkspace } from "@/components/app/workspace-context";
 import { useApi } from "@/lib/hooks";
+import { BrainKeySelect, PROVIDER_IDS, PROVIDER_LABEL } from "@/components/app/brain-key-select";
 import { api, ApiError } from "@/lib/api";
 import { formatDate, pct, timeAgo } from "@/lib/utils";
 import { PURPOSES } from "../page";
 import { CategoryBadge, Confidence } from "@/components/app/moderation-shared";
 
-type Version = { id: string; version: number; instructions: string; languages: string[]; tone: string; provider: string; model: string; temperature: number; safetyRules: string; escalationRules: string; responseConstraints: string; knowledgeSourceIds: string[]; changeNote: string; createdAt: string };
+type Version = { id: string; version: number; instructions: string; languages: string[]; tone: string; provider: string; model: string; credentialId?: string | null; temperature: number; safetyRules: string; escalationRules: string; responseConstraints: string; knowledgeSourceIds: string[]; changeNote: string; createdAt: string };
 type Detail = { agent: { id: string; name: string; description: string; purpose: string; status: string; activeVersionId: string | null; versions: Version[]; evaluations: { id: string; status: string; total: number; correct: number; metrics: { accuracy?: number; hide?: { falsePositiveRate: number }; complaintPreserved?: number }; createdAt: string; completedAt: string | null; agentVersionId: string; error: string | null }[] }; assignedPages: { id: string; name: string }[] };
 
 export default function AgentDetail({ params }: { params: Promise<{ id: string }> }) {
@@ -74,7 +75,7 @@ function ConfigForm({ agentId, version, providers, knowledge, canEdit, onSaved }
   async function save(activate: boolean) {
     setSaving(true);
     try {
-      await api.post(`/api/v1/agents/${agentId}/versions`, { instructions: f.instructions, languages: f.languages, tone: f.tone, provider: f.provider, model: f.model, temperature: f.temperature, safetyRules: f.safetyRules, escalationRules: f.escalationRules, responseConstraints: f.responseConstraints, knowledgeSourceIds: f.knowledgeSourceIds, changeNote: f.changeNote || "Updated configuration", activate });
+      await api.post(`/api/v1/agents/${agentId}/versions`, { instructions: f.instructions, languages: f.languages, tone: f.tone, provider: f.provider, model: f.model, credentialId: f.credentialId ?? null, temperature: f.temperature, safetyRules: f.safetyRules, escalationRules: f.escalationRules, responseConstraints: f.responseConstraints, knowledgeSourceIds: f.knowledgeSourceIds, changeNote: f.changeNote || "Updated configuration", activate });
       toast.success(activate ? "New version saved and activated" : "New version saved as draft");
       onSaved();
     } catch (err) {
@@ -95,8 +96,9 @@ function ConfigForm({ agentId, version, providers, knowledge, canEdit, onSaved }
         </div>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Provider"><Select value={f.provider} onChange={(e) => { set("provider", e.target.value); set("model", providers[e.target.value]?.[0] ?? ""); }}><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="deepseek">DeepSeek</option></Select></Field>
+            <Field label="Provider"><Select value={f.provider} onChange={(e) => { set("provider", e.target.value); set("model", providers[e.target.value]?.[0] ?? ""); set("credentialId", null); }}>{PROVIDER_IDS.map((p) => <option key={p} value={p}>{PROVIDER_LABEL[p]}</option>)}</Select></Field>
             <Field label="Model"><Select value={f.model} onChange={(e) => set("model", e.target.value)}>{(providers[f.provider] ?? [f.model]).map((m) => <option key={m} value={m}>{m}</option>)}</Select></Field>
+            <div className="col-span-2"><BrainKeySelect provider={f.provider} value={f.credentialId} onChange={(v) => set("credentialId", v)} /></div>
             <Field label="Temperature"><Input type="number" min={0} max={1.5} step={0.05} value={f.temperature} onChange={(e) => set("temperature", Number(e.target.value))} /></Field>
             <Field label="Tone"><Input value={f.tone} onChange={(e) => set("tone", e.target.value)} /></Field>
           </div>

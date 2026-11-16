@@ -2,17 +2,22 @@ import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "../db";
 import { Errors } from "../errors";
 import { audit } from "../audit";
-import type { WorkspaceContext } from "../rbac/guard";
+import { assertPageAccess, type WorkspaceContext } from "../rbac/guard";
 import { executeHide, executeReply, executeUnhide } from "./engine";
 import { CATEGORIES, type Category } from "./classifier";
 import { enqueueOutbox } from "../queue/outbox";
+import { createPrecedent } from "./precedents";
+
+/** "Always hide / never hide comments like this" — optional on every review action. */
+export type AlwaysOption = { always?: boolean; alwaysScope?: "PAGE" | "WORKSPACE"; alwaysNote?: string };
 
 type Meta = { ip?: string | null };
 
-export async function listComments(workspaceId: string, q: { pageId?: string; category?: string; status?: string; review?: "PENDING" | "APPROVED" | "REJECTED"; hidden?: boolean; search?: string; from?: Date; to?: Date; skip: number; take: number }) {
+export async function listComments(workspaceId: string, q: { pageId?: string; pageScope?: { in: string[] } | null; category?: string; status?: string; review?: "PENDING" | "APPROVED" | "REJECTED"; hidden?: boolean; search?: string; from?: Date; to?: Date; skip: number; take: number }) {
   const where: Prisma.CommentWhereInput = {
     workspaceId,
-    ...(q.pageId ? { pageId: q.pageId } : {}),
+    ...(q.pageId ? { pageId: q.pageId } : q.pageScope ? { pageId: q.pageScope } : {}),
+    ...(q.pageId && q.pageScope && !q.pageScope.in.includes(q.pageId) ? { id: "__no_access__" } : {}),
     ...(q.status ? { status: q.status } : {}),
     ...(q.hidden !== undefined ? { isHidden: q.hidden } : {}),
     ...(q.search ? { OR: [{ message: { contains: q.search, mode: "insensitive" } }, { authorName: { contains: q.search, mode: "insensitive" } }] } : {}),
@@ -38,8 +43,8 @@ export async function listComments(workspaceId: string, q: { pageId?: string; ca
   return { total, rows: rows.map((r) => ({ ...r, classifications: r.classifications.map((c) => ({ ...c, costMicroUsd: Number(c.costMicroUsd) })) })) };
 }
 
-export async function commentDetail(workspaceId: string, commentId: string) {
-  const c = await prisma.comment.findFirst({ where: { id: commentId, workspaceId }, include: { page: true, classifications: { orderBy: { createdAt: "desc" } }, decisions: { orderBy: { createdAt: "desc" } }, actions: { orderBy: { createdAt: "desc" } } } });
+export async function commentDetail(workspaceId: string, commentId: string, scope: { in: string[] } | null = null) {
+  const c = await prisma.comment.findFirst({ where: { id: commentId, workspaceId, ...(scope ? { pageId: scope } : {}) }, include: { page: true, classifications: { orderBy: { createdAt: "desc" } }, decisions: { orderBy: { createdAt: "desc" } }, actions: { orderBy: { createdAt: "desc" } } } });
   if (!c) throw Errors.notFound("Comment");
   const actionIds = c.actions.map((a) => a.outboundActionId).filter(Boolean) as string[];
   const outbound = await prisma.outboundAction.findMany({ where: { id: { in: actionIds } }, select: { id: true, status: true, attempts: true, lastError: true, externalId: true, completedAt: true } });
@@ -50,27 +55,36 @@ export async function commentDetail(workspaceId: string, commentId: string) {
 async function loadCommentForAction(ctx: WorkspaceContext, commentId: string) {
   const c = await prisma.comment.findFirst({ where: { id: commentId, workspaceId: ctx.workspace.id }, include: { page: true, decisions: { where: { reviewStatus: "PENDING" }, orderBy: { createdAt: "desc" }, take: 1 } } });
   if (!c) throw Errors.notFound("Comment");
+  assertPageAccess(ctx, c.pageId);
   if (c.page.status !== "CONNECTED") throw Errors.conflict("This Page is not connected; reconnect it before taking actions");
   return c;
 }
 
-export async function hideComment(ctx: WorkspaceContext, commentId: string, note: string | undefined, meta: Meta) {
+async function maybePrecedent(ctx: WorkspaceContext, commentId: string, decision: "HIDE" | "KEEP", opt: AlwaysOption | undefined, sourceDecisionId: string | null, meta: Meta) {
+  if (!opt?.always) return null;
+  const p = await createPrecedent(ctx, { commentId, decision, scope: opt.alwaysScope ?? "PAGE", note: opt.alwaysNote, sourceDecisionId }, meta);
+  return p.id;
+}
+
+export async function hideComment(ctx: WorkspaceContext, commentId: string, note: string | undefined, meta: Meta, always?: AlwaysOption) {
   const c = await loadCommentForAction(ctx, commentId);
   if (c.isHidden) throw Errors.conflict("Comment is already hidden");
   const action = await executeHide({ workspaceId: ctx.workspace.id, page: c.page, comment: c, decisionId: c.decisions[0]?.id ?? null, actorType: "USER", actorUserId: ctx.user.id, note });
-  if (c.decisions[0]) await prisma.moderationDecision.update({ where: { id: c.decisions[0].id }, data: { reviewStatus: "APPROVED", reviewedById: ctx.user.id, reviewedAt: new Date(), reviewNote: note } });
-  await audit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "comment.hide_requested", targetType: "Comment", targetId: commentId, ip: meta.ip, meta: { note } });
-  return { actionId: action.id, status: action.status };
+  await prisma.moderationDecision.updateMany({ where: { commentId, reviewStatus: "PENDING" }, data: { reviewStatus: "APPROVED", reviewedById: ctx.user.id, reviewedAt: new Date(), reviewNote: note } });
+  const precedentId = await maybePrecedent(ctx, commentId, "HIDE", always, c.decisions[0]?.id ?? null, meta);
+  await audit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "comment.hide_requested", targetType: "Comment", targetId: commentId, ip: meta.ip, meta: { note, precedentId } });
+  return { actionId: action.id, status: action.status, precedentId };
 }
 
-export async function unhideComment(ctx: WorkspaceContext, commentId: string, note: string | undefined, meta: Meta) {
+export async function unhideComment(ctx: WorkspaceContext, commentId: string, note: string | undefined, meta: Meta, always?: AlwaysOption) {
   const c = await loadCommentForAction(ctx, commentId);
   const action = await executeUnhide({ workspaceId: ctx.workspace.id, page: c.page, comment: c, actorUserId: ctx.user.id, note });
   // Unhiding an AI-hidden comment is a false-positive signal unless the reviewer says otherwise.
   const aiHide = await prisma.moderationAction.findFirst({ where: { commentId, type: "HIDE", actorType: "AI" }, orderBy: { createdAt: "desc" } });
   if (aiHide?.decisionId) await prisma.moderationDecision.update({ where: { id: aiHide.decisionId }, data: { feedback: "FALSE_POSITIVE", reviewedById: ctx.user.id, reviewedAt: new Date(), reviewNote: note } }).catch(() => {});
-  await audit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "comment.unhide_requested", targetType: "Comment", targetId: commentId, ip: meta.ip, meta: { note, wasAiHidden: Boolean(aiHide) } });
-  return { actionId: action.id, status: action.status };
+  const precedentId = await maybePrecedent(ctx, commentId, "KEEP", always, aiHide?.decisionId ?? null, meta);
+  await audit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "comment.unhide_requested", targetType: "Comment", targetId: commentId, ip: meta.ip, meta: { note, wasAiHidden: Boolean(aiHide), precedentId } });
+  return { actionId: action.id, status: action.status, precedentId };
 }
 
 export async function replyToComment(ctx: WorkspaceContext, commentId: string, message: string, meta: Meta) {
@@ -86,16 +100,18 @@ export async function replyToComment(ctx: WorkspaceContext, commentId: string, m
  * Review an AI decision: approve (execute the recommended hide/reply), reject (keep), with optional feedback
  * labels and category correction which become training examples.
  */
-export async function reviewDecision(ctx: WorkspaceContext, decisionId: string, input: { outcome: "APPROVE" | "REJECT"; note?: string; feedback?: "CORRECT" | "FALSE_POSITIVE" | "FALSE_NEGATIVE" | "WRONG_CATEGORY"; correctedCategory?: string; editedReply?: string; saveAsExample?: boolean }, meta: Meta) {
+export async function reviewDecision(ctx: WorkspaceContext, decisionId: string, input: { outcome: "APPROVE" | "REJECT"; note?: string; feedback?: "CORRECT" | "FALSE_POSITIVE" | "FALSE_NEGATIVE" | "WRONG_CATEGORY"; correctedCategory?: string; editedReply?: string; saveAsExample?: boolean } & AlwaysOption, meta: Meta) {
   const d = await prisma.moderationDecision.findFirst({ where: { id: decisionId, workspaceId: ctx.workspace.id }, include: { comment: { include: { page: true, classifications: { orderBy: { createdAt: "desc" }, take: 1 } } } } });
   if (!d) throw Errors.notFound("Decision");
+  assertPageAccess(ctx, d.comment.pageId);
   if (d.reviewStatus !== "PENDING") throw Errors.conflict("This decision has already been reviewed");
   if (input.correctedCategory && !(CATEGORIES as readonly string[]).includes(input.correctedCategory)) throw Errors.badRequest("Unknown category");
   const cls = d.comment.classifications[0];
   let actionId: string | null = null;
   if (input.outcome === "APPROVE") {
     if (d.comment.page.status !== "CONNECTED") throw Errors.conflict("Page not connected");
-    if (d.decision === "HIDE") actionId = (await executeHide({ workspaceId: ctx.workspace.id, page: d.comment.page, comment: d.comment, decisionId: d.id, actorType: "USER", actorUserId: ctx.user.id, note: input.note })).id;
+    // For REVIEW decisions (the AI was unsure) "approve" means the reviewer chose to hide, unless they supplied a reply instead.
+    if (d.decision === "HIDE" || (d.decision === "REVIEW" && !input.editedReply)) actionId = (await executeHide({ workspaceId: ctx.workspace.id, page: d.comment.page, comment: d.comment, decisionId: d.id, actorType: "USER", actorUserId: ctx.user.id, note: input.note })).id;
     else if (d.decision === "REPLY" || input.editedReply) {
       const text = (input.editedReply ?? cls?.suggestedReply ?? "").trim();
       if (!text) throw Errors.badRequest("No reply text available");
@@ -103,6 +119,8 @@ export async function reviewDecision(ctx: WorkspaceContext, decisionId: string, 
     }
   }
   await prisma.$transaction(async (tx) => {
+    // Any older pending decision on the same comment is superseded by this review.
+    await tx.moderationDecision.updateMany({ where: { commentId: d.commentId, reviewStatus: "PENDING", id: { not: d.id } }, data: { reviewStatus: "NOT_REQUIRED", reviewNote: "Superseded by a later review" } });
     await tx.moderationDecision.update({ where: { id: d.id }, data: { reviewStatus: input.outcome === "APPROVE" ? "APPROVED" : "REJECTED", reviewedById: ctx.user.id, reviewedAt: new Date(), reviewNote: input.note, feedback: input.feedback ?? (input.outcome === "APPROVE" ? "CORRECT" : d.decision === "HIDE" ? "FALSE_POSITIVE" : null), correctedCategory: input.correctedCategory } });
     if (input.saveAsExample || input.correctedCategory || input.editedReply) {
       await tx.trainingExample.create({
@@ -121,9 +139,16 @@ export async function reviewDecision(ctx: WorkspaceContext, decisionId: string, 
         },
       });
     }
-    await audit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: `moderation.decision_${input.outcome.toLowerCase()}d`, targetType: "ModerationDecision", targetId: d.id, ip: meta.ip, meta: { decision: d.decision, feedback: input.feedback, correctedCategory: input.correctedCategory } }, tx);
+    await audit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: `moderation.decision_${input.outcome.toLowerCase()}d`, targetType: "ModerationDecision", targetId: d.id, ip: meta.ip, meta: { decision: d.decision, feedback: input.feedback, correctedCategory: input.correctedCategory, always: Boolean(input.always) } }, tx);
   });
-  return { actionId };
+  // "Always": approving a HIDE → always hide comments like this; rejecting a HIDE → never hide comments like this.
+  let precedentId: string | null = null;
+  if (input.always && d.decision !== "REPLY") {
+    const hideable = d.decision === "HIDE" || d.decision === "REVIEW";
+    const rulingDecision = !hideable ? null : input.outcome === "APPROVE" && !input.editedReply ? "HIDE" : input.outcome === "REJECT" ? "KEEP" : null;
+    if (rulingDecision) precedentId = (await createPrecedent(ctx, { commentId: d.commentId, decision: rulingDecision, scope: input.alwaysScope ?? "PAGE", category: input.correctedCategory ?? null, note: input.alwaysNote ?? input.note, sourceDecisionId: d.id }, meta)).id;
+  }
+  return { actionId, precedentId };
 }
 
 export async function bulkReview(ctx: WorkspaceContext, decisionIds: string[], outcome: "APPROVE" | "REJECT", meta: Meta) {
@@ -142,6 +167,7 @@ export async function bulkReview(ctx: WorkspaceContext, decisionIds: string[], o
 export async function reanalyze(ctx: WorkspaceContext, commentId: string) {
   const c = await prisma.comment.findFirst({ where: { id: commentId, workspaceId: ctx.workspace.id } });
   if (!c) throw Errors.notFound("Comment");
+  assertPageAccess(ctx, c.pageId);
   await prisma.$transaction(async (tx) => {
     // Older pending decisions are superseded by the fresh analysis.
     await tx.moderationDecision.updateMany({ where: { commentId, reviewStatus: "PENDING" }, data: { reviewStatus: "NOT_REQUIRED", reviewNote: "Superseded by re-analysis" } });
@@ -150,9 +176,10 @@ export async function reanalyze(ctx: WorkspaceContext, commentId: string) {
   });
 }
 
-export async function moderationStats(workspaceId: string, pageId?: string, days = 30) {
+export async function moderationStats(workspaceId: string, pageId?: string, days = 30, scope: { in: string[] } | null = null) {
   const since = new Date(Date.now() - days * 86_400_000);
-  const pageFilter = pageId ? { pageId } : {};
+  const pageFilter = pageId ? { pageId: scope && !scope.in.includes(pageId) ? "__no_access__" : pageId } : scope ? { pageId: scope } : {};
+  const scopedIds = pageId ? [pageFilter.pageId as string] : scope ? scope.in : null;
   const [total, byCategory, hiddenAuto, pending, overrides, falsePositives, aiHides, daily] = await Promise.all([
     prisma.comment.count({ where: { workspaceId, receivedAt: { gte: since }, ...pageFilter } }),
     prisma.commentClassification.groupBy({ by: ["category"], _count: true, where: { workspaceId, createdAt: { gte: since }, comment: pageFilter } }),
@@ -165,7 +192,7 @@ export async function moderationStats(workspaceId: string, pageId?: string, days
       SELECT date_trunc('day', c."receivedAt") AS day, COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE c."isHidden")::int AS hidden,
         COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "CommentClassification" k WHERE k."commentId" = c."id" AND k."category" IN ('ABUSE','HARASSMENT','HATE_SPEECH','SPAM','SCAM','SUSPICIOUS_LINK','REPEATED_PROMO','PII_EXPOSURE','HIGH_RISK')))::int AS harmful
-      FROM "Comment" c WHERE c."workspaceId" = ${workspaceId} AND c."receivedAt" >= ${since} ${pageId ? Prisma.sql`AND c."pageId" = ${pageId}` : Prisma.empty}
+      FROM "Comment" c WHERE c."workspaceId" = ${workspaceId} AND c."receivedAt" >= ${since} ${scopedIds ? Prisma.sql`AND c."pageId" = ANY(${scopedIds}::text[])` : Prisma.empty}
       GROUP BY 1 ORDER BY 1`,
   ]);
   const cat = Object.fromEntries(byCategory.map((b) => [b.category, b._count]));

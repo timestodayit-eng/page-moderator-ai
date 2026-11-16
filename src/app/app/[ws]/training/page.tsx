@@ -1,7 +1,7 @@
 "use client";
 import { useRef, useState } from "react";
-import { BookOpen, Upload, Plus, Trash2, FileText, GraduationCap, Tags, Gauge } from "lucide-react";
-import { Alert, Badge, Button, Card, CardHeader, Dialog, EmptyState, Field, Input, LoadingBlock, PageHeader, Pagination, Select, Stat, Table, Tabs, Td, Textarea, Th, useToast } from "@/components/ui";
+import { BookOpen, Upload, Plus, Trash2, FileText, GraduationCap, Tags, Gauge, Scale } from "lucide-react";
+import { Alert, Badge, Button, Card, CardHeader, Dialog, EmptyState, Field, Input, LoadingBlock, PageHeader, Pagination, SearchInput, Select, Stat, Switch, Table, Tabs, Td, Textarea, Th, useToast } from "@/components/ui";
 import { useWorkspace } from "@/components/app/workspace-context";
 import { useApi } from "@/lib/hooks";
 import { api, ApiError } from "@/lib/api";
@@ -9,20 +9,20 @@ import { pct, timeAgo } from "@/lib/utils";
 import { CATEGORY_LABEL, CategoryBadge } from "@/components/app/moderation-shared";
 import { Bars } from "@/components/app/charts";
 
-type Stats = { documents: number; examples: number; evaluated: number; reviewerAgreement: number | null; falsePositiveRate: number | null; replyApprovalRate: number | null; versions: number; latestAccuracy: number | null; perCategory: Record<string, { precision: number; recall: number }> | null; recentEvaluations: { id: string; agent: string; completedAt: string; total: number; correct: number; metrics: { accuracy?: number } }[] };
+type Stats = { documents: number; examples: number; precedents?: number; evaluated: number; reviewerAgreement: number | null; falsePositiveRate: number | null; replyApprovalRate: number | null; versions: number; latestAccuracy: number | null; perCategory: Record<string, { precision: number; recall: number }> | null; recentEvaluations: { id: string; agent: string; completedAt: string; total: number; correct: number; metrics: { accuracy?: number } }[] };
 type Source = { id: string; title: string; kind: string; status: string; sizeBytes: number; error: string | null; updatedAt: string; _count: { chunks: number } };
 type Example = { id: string; kind: string; text: string; language: string; category: string | null; expectedDecision: string | null; expectedReply: string | null; explanation: string; source: string; reviewerFeedback: string; updatedAt: string };
 const KINDS = ["company", "services", "policy", "faq", "approved_reply", "product", "pricing", "terms", "text"];
 
 export default function TrainingCenter() {
   const { can } = useWorkspace();
-  const [tab, setTab] = useState<"overview" | "knowledge" | "examples">("overview");
+  const [tab, setTab] = useState<"overview" | "knowledge" | "examples" | "rulings">("overview");
   const stats = useApi<Stats>("/api/v1/training/stats");
   const s = stats.data;
   return (
     <div className="space-y-6">
       <PageHeader title="AI Training Center" description="Teach the AI about this business with knowledge documents and labelled examples, then evaluate before trusting automation. Corrections guide prompts and retrieval — they do not retrain the foundation model." />
-      <Tabs value={tab} onChange={setTab} items={[{ value: "overview", label: "Dashboard" }, { value: "knowledge", label: "Knowledge", count: s?.documents }, { value: "examples", label: "Training examples", count: s?.examples }]} />
+      <Tabs value={tab} onChange={setTab} items={[{ value: "overview", label: "Dashboard" }, { value: "knowledge", label: "Knowledge", count: s?.documents }, { value: "examples", label: "Training examples", count: s?.examples }, { value: "rulings", label: "Learned rulings", count: s?.precedents }]} />
       {tab === "overview" ? (
         <div className="space-y-5">
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -39,6 +39,75 @@ export default function TrainingCenter() {
       ) : null}
       {tab === "knowledge" ? <Knowledge canEdit={can("agents.train")} onChanged={() => stats.refresh()} /> : null}
       {tab === "examples" ? <Examples canEdit={can("agents.train")} onChanged={() => stats.refresh()} /> : null}
+      {tab === "rulings" ? <Rulings canEdit={can("moderation.approve")} onChanged={() => stats.refresh()} /> : null}
+    </div>
+  );
+}
+
+type Precedent = { id: string; pageId: string | null; pageName: string | null; text: string; category: string; decision: "HIDE" | "KEEP"; note: string; hits: number; lastHitAt: string | null; status: string; createdAt: string; createdByName: string | null };
+
+/** Rulings learned from the review panel: "always hide / never hide comments like this". */
+function Rulings({ canEdit, onChanged }: { canEdit: boolean; onChanged: () => void }) {
+  const toast = useToast();
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [decision, setDecision] = useState("");
+  const list = useApi<{ total: number; rows: Precedent[]; pageSize: number }>(`/api/v1/moderation/precedents?page=${page}&pageSize=30${search ? `&search=${encodeURIComponent(search)}` : ""}${decision ? `&decision=${decision}` : ""}`);
+  const rows = list.data?.rows ?? [];
+  async function patch(id: string, body: Record<string, unknown>, ok: string) {
+    try {
+      await api.patch(`/api/v1/moderation/precedents/${id}`, body);
+      toast.success(ok);
+      list.refresh();
+      onChanged();
+    } catch (err) {
+      toast.error("Could not update ruling", err instanceof ApiError ? err.message : undefined);
+    }
+  }
+  async function remove(id: string) {
+    try {
+      await api.delete(`/api/v1/moderation/precedents/${id}`);
+      toast.success("Ruling removed");
+      list.refresh();
+      onChanged();
+    } catch (err) {
+      toast.error("Could not remove ruling", err instanceof ApiError ? err.message : undefined);
+    }
+  }
+  return (
+    <div className="space-y-4">
+      <Alert tone="info" title="How learned rulings work">
+        When a reviewer ticks <b>“always hide / never hide comments like this”</b> in the review queue, the ruling is stored here. Every new comment is compared with these rulings: identical text is handled instantly without an AI call, and the AI treats the rulings as binding when a new comment carries the same meaning in different words, language or script. Disable or remove a ruling at any time. <span className="font-bengali">(রিভিউ প্যানেলে একবার “সবসময় হাইড” বললে AI পরবর্তী সব সময় একই রকম কমেন্ট নিজে হাইড করবে।)</span>
+      </Alert>
+      <div className="flex flex-wrap items-center gap-3">
+        <SearchInput value={search} onChange={(v) => { setSearch(v); setPage(1); }} placeholder="Search rulings…" className="w-72" />
+        <Select value={decision} onChange={(e) => { setDecision(e.target.value); setPage(1); }} className="w-44"><option value="">All rulings</option><option value="HIDE">Always hide</option><option value="KEEP">Never hide</option></Select>
+        <span className="ml-auto text-[13px] text-text-3">{list.data?.total ?? 0} rulings</span>
+      </div>
+      {list.loading && !list.data ? <LoadingBlock rows={4} /> : !rows.length ? <EmptyState icon={<Scale className="h-6 w-6" />} title="No rulings yet" description="Review a comment in the queue and tick “always hide / never hide comments like this” to teach the AI a standing rule." /> : (
+        <Card padded={false}>
+          <Table>
+            <thead><tr><Th>Comment</Th><Th>Ruling</Th><Th>Scope</Th><Th>Matched</Th><Th>Active</Th><Th></Th></tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className={r.status === "DISABLED" ? "opacity-60" : ""}>
+                  <Td><div className="max-w-md"><p className="font-bengali text-[14px] leading-snug text-text">{r.text}</p><div className="mt-1 text-[12px] text-text-3"><CategoryBadge category={r.category} /> {r.note ? <span className="ml-1">· {r.note}</span> : null}<span className="ml-1">· {r.createdByName ?? "reviewer"} · {timeAgo(r.createdAt)}</span></div></div></Td>
+                  <Td><Badge tone={r.decision === "HIDE" ? "danger" : "success"}>{r.decision === "HIDE" ? "Always hide" : "Never hide"}</Badge></Td>
+                  <Td>{r.pageId ? <span className="text-[13px]">{r.pageName ?? "This Page"}</span> : <Badge tone="primary">All Pages</Badge>}</Td>
+                  <Td><span className="text-[13px]">{r.hits}×</span>{r.lastHitAt ? <div className="text-[11px] text-text-3">{timeAgo(r.lastHitAt)}</div> : null}</Td>
+                  <Td>{canEdit ? <Switch checked={r.status === "ACTIVE"} onChange={(v) => patch(r.id, { status: v ? "ACTIVE" : "DISABLED" }, v ? "Ruling enabled" : "Ruling disabled")} /> : <Badge tone={r.status === "ACTIVE" ? "success" : "neutral"}>{r.status.toLowerCase()}</Badge>}</Td>
+                  <Td className="text-right">{canEdit ? <div className="flex justify-end gap-1">
+                    <Button size="sm" variant="ghost" onClick={() => patch(r.id, { decision: r.decision === "HIDE" ? "KEEP" : "HIDE" }, "Ruling flipped")}>{r.decision === "HIDE" ? "Make “never hide”" : "Make “always hide”"}</Button>
+                    <Button size="sm" variant="ghost" onClick={() => patch(r.id, { scope: r.pageId ? "WORKSPACE" : "PAGE" }, "Scope changed")}>{r.pageId ? "Apply to all Pages" : "Limit to its Page"}</Button>
+                    <Button size="sm" variant="ghost" onClick={() => remove(r.id)}><Trash2 className="h-4 w-4 text-danger" /></Button>
+                  </div> : null}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+          <div className="border-t border-border px-4"><Pagination page={page} pageSize={list.data?.pageSize ?? 30} total={list.data?.total ?? 0} onPage={setPage} /></div>
+        </Card>
+      )}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { Bot, Plus, Sparkles } from "lucide-react";
 import { Badge, Button, Card, Dialog, EmptyState, Field, Input, LoadingBlock, PageHeader, Select, Textarea, useToast } from "@/components/ui";
 import { useWorkspace } from "@/components/app/workspace-context";
 import { useApi } from "@/lib/hooks";
+import { BrainKeySelect, PROVIDER_IDS, PROVIDER_LABEL } from "@/components/app/brain-key-select";
 import { api, ApiError } from "@/lib/api";
 import { timeAgo } from "@/lib/utils";
 
@@ -48,7 +49,7 @@ function CreateAgentDialog({ onClose, onCreated }: { onClose: () => void; onCrea
   const tpl = useApi<Templates>("/api/v1/agents/templates");
   const knowledge = useApi<{ sources: { id: string; title: string; status: string }[] }>("/api/v1/training/knowledge");
   const [purpose, setPurpose] = useState("MODERATION");
-  const [form, setForm] = useState({ name: "", description: "", instructions: "", tone: "professional", provider: "openai", model: "gpt-4.1-mini", temperature: 0.2, safetyRules: "", escalationRules: "", responseConstraints: "", languages: ["bn", "en"] as string[], knowledgeSourceIds: [] as string[] });
+  const [form, setForm] = useState({ name: "", description: "", instructions: "", tone: "professional", provider: "openai", model: "gpt-4.1-mini", credentialId: null as string | null, temperature: 0.2, safetyRules: "", escalationRules: "", responseConstraints: "", languages: ["bn", "en"] as string[], knowledgeSourceIds: [] as string[] });
   const [saving, setSaving] = useState(false);
   const applyTemplate = (p: string) => {
     setPurpose(p);
@@ -58,7 +59,7 @@ function CreateAgentDialog({ onClose, onCreated }: { onClose: () => void; onCrea
   async function create(activate: boolean) {
     setSaving(true);
     try {
-      await api.post("/api/v1/agents", { name: form.name, description: form.description, purpose, activate, version: { instructions: form.instructions, languages: form.languages, tone: form.tone, provider: form.provider, model: form.model, temperature: form.temperature, safetyRules: form.safetyRules, escalationRules: form.escalationRules, responseConstraints: form.responseConstraints, knowledgeSourceIds: form.knowledgeSourceIds, changeNote: "Initial version" } });
+      await api.post("/api/v1/agents", { name: form.name, description: form.description, purpose, activate, version: { instructions: form.instructions, languages: form.languages, tone: form.tone, provider: form.provider, model: form.model, credentialId: form.credentialId, temperature: form.temperature, safetyRules: form.safetyRules, escalationRules: form.escalationRules, responseConstraints: form.responseConstraints, knowledgeSourceIds: form.knowledgeSourceIds, changeNote: "Initial version" } });
       toast.success("Agent created");
       onCreated();
     } catch (err) {
@@ -75,9 +76,10 @@ function CreateAgentDialog({ onClose, onCreated }: { onClose: () => void; onCrea
           <Field label="Name" required><Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder={tpl.data?.templates[purpose]?.name} /></Field>
           <Field label="Description"><Input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} /></Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Provider"><Select value={form.provider} onChange={(e) => setForm((f) => ({ ...f, provider: e.target.value, model: tpl.data?.providers[e.target.value]?.[0] ?? "" }))}><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="deepseek">DeepSeek</option></Select></Field>
+            <Field label="Provider"><Select value={form.provider} onChange={(e) => setForm((f) => ({ ...f, provider: e.target.value, model: tpl.data?.providers[e.target.value]?.[0] ?? "", credentialId: null }))}>{PROVIDER_IDS.map((p) => <option key={p} value={p}>{PROVIDER_LABEL[p]}</option>)}</Select></Field>
             <Field label="Model"><Select value={form.model} onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}>{models.map((m) => <option key={m} value={m}>{m}</option>)}</Select></Field>
           </div>
+          <BrainKeySelect provider={form.provider} value={form.credentialId} onChange={(v) => setForm((f) => ({ ...f, credentialId: v }))} />
           <div className="grid grid-cols-2 gap-3">
             <Field label="Temperature" hint="0 = consistent, 1 = creative"><Input type="number" min={0} max={1.5} step={0.05} value={form.temperature} onChange={(e) => setForm((f) => ({ ...f, temperature: Number(e.target.value) }))} /></Field>
             <Field label="Tone"><Input value={form.tone} onChange={(e) => setForm((f) => ({ ...f, tone: e.target.value }))} /></Field>

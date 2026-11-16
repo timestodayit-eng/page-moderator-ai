@@ -102,6 +102,18 @@ Automatic Meta actions stay off until `META_AUTOMATION_ENABLED=true` **and** a P
 
 The classifier understands meaning, not keywords: Bengali / Banglish slang, profanity, accusations like "বাটপার", "ঠকবাজ", "পাসপোর্ট দিয়ে জীবনের সর্বনাশ", sarcasm and "negative vibe" comments are recognised as DEFAMATION / ABUSE / NEGATIVE. Spam, scams, defamation, abuse, harassment and hate speech can be auto-hidden once a Page enables automation. Plain complaints and negative opinions go to the review queue by default; a Page admin can turn on **"Also hide negative-sentiment comments"** in the Page's configuration to let the AI hide those automatically as well (same confidence thresholds and hourly caps; every hide is reversible from the queue).
 
+### Review panel → learned rulings (the AI learns forever)
+
+Comments the AI is unsure about, or that need a human under the Page's policy, land in **AI Moderation → Review queue**. Every action there has a checkbox **“Always hide / never hide comments like this from now on”** (on this Page or on all Pages). The ruling is stored (Training Center → *Learned rulings*) and applied to every future comment with the same meaning: identical or near-identical text is handled instantly without an AI call; paraphrases in any language or script are matched by the model, which receives the rulings as binding instructions. Rulings can be disabled, flipped, widened or deleted at any time. A ruling never bypasses the Page's automation mode, the explicit auto-hide activation, the platform allow-list, the kill switch or the hourly caps.
+
+### Per-Page instructions for the AI
+
+Facebook Pages → Configure → **Instructions for the AI**: plain-language Bengali/English guidance ("hide promotion of other agencies and fake visa guarantees; never hide honest complaints about processing time"). It is injected into every classification; no keyword lists are needed.
+
+### Team access limits and personal AI keys
+
+Team Management → Invite / **Access**: for each member choose which Pages they handle (all, or an assigned list), the maximum number of Pages they may handle and the maximum number of AI agents they may create. Limits are enforced server-side on every request (Pages, comments, review, inbox, agents). Any member who can configure agents may add a **personal** OpenAI / Anthropic (Claude) / Gemini / DeepSeek key under Settings → AI and pin their agents to it (Agent Studio → *Brain / API key*); personal keys are visible only to their owner and usage is billed to that key.
+
 ## 8. AI API integration
 
 Platform-managed keys: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY` (any subset; `DEFAULT_AI_PROVIDER` picks the default). Customers may bring their own keys in Settings → AI providers; keys are verified with a test call, stored with AES-256-GCM, and never fall back to platform credits unless a Super Admin allows it for that workspace. Budgets: per-plan monthly AI allowance (atomic reservation, no overspend under concurrency) and a platform-wide cap in Platform Settings → AI.

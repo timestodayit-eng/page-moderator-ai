@@ -155,6 +155,7 @@ model Workspace {
   auditLogs        AuditLog[]
   savedReplies     SavedReply[]
   supportGrants    SupportAccessGrant[]
+  precedents       ModerationPrecedent[]
 }
 
 model Role {
@@ -202,6 +203,14 @@ model Membership {
   workspaceId String
   roleId      String
   status      MembershipStatus @default(ACTIVE)
+  // Per-member access limits set by the workspace owner/admin (in addition to the role):
+  //  pageAccess ALL      → every Page of the workspace (subject to role permissions)
+  //  pageAccess ASSIGNED → only the Pages listed in allowedPageIds (Pages this member connects are added automatically)
+  //  maxPages / maxAgents → null = unlimited; otherwise caps the Pages this member may handle and the agents they may create
+  pageAccess     String   @default("ALL")
+  allowedPageIds String[]
+  maxPages       Int?
+  maxAgents      Int?
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
   user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -219,6 +228,10 @@ model Invitation {
   roleId         String
   tokenHash      String    @unique
   invitedById    String
+  pageAccess     String    @default("ALL")
+  allowedPageIds String[]
+  maxPages       Int?
+  maxAgents      Int?
   expiresAt      DateTime
   acceptedAt     DateTime?
   acceptedUserId String?
@@ -431,8 +444,9 @@ model AgentVersion {
   instructions        String
   languages           String[]
   tone                String   @default("professional")
-  provider            String   // openai | gemini | deepseek
+  provider            String   // openai | anthropic | gemini | deepseek
   model               String
+  credentialId        String?  // pin this agent to one BYOK key (e.g. a team member's personal key); null = workspace default
   temperature         Float    @default(0.2)
   safetyRules         String   @default("")
   allowedActions      String[]
@@ -569,6 +583,7 @@ model CommentClassification {
   model             String
   agentVersionId    String?
   policyVersion     String
+  precedentId       String?  // set when a reviewer precedent ("always hide / never hide comments like this") decided the outcome
   latencyMs         Int
   tokensIn          Int      @default(0)
   tokensOut         Int      @default(0)
@@ -578,6 +593,34 @@ model CommentClassification {
 
   @@index([workspaceId, category])
   @@index([commentId])
+}
+
+/**
+ * A reviewer's standing ruling learned from the review panel: "comments like this must ALWAYS be hidden"
+ * (or never hidden). The AI applies it to every future comment with the same meaning — exact/near-exact
+ * text deterministically, paraphrases via the model — on one Page or across the workspace.
+ */
+model ModerationPrecedent {
+  id               String    @id @default(cuid())
+  workspaceId      String
+  pageId           String?   // null = applies to every Page of the workspace
+  text             String
+  normalizedText   String
+  category         String
+  decision         String    // HIDE | KEEP
+  note             String    @default("")
+  sourceCommentId  String?
+  sourceDecisionId String?
+  createdById      String?
+  hits             Int       @default(0)
+  lastHitAt        DateTime?
+  status           String    @default("ACTIVE") // ACTIVE | DISABLED
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, pageId])
 }
 
 model ModerationDecision {
@@ -967,7 +1010,8 @@ model UsageCounter {
 model AiCredential {
   id             String     @id @default(cuid())
   workspaceId    String?    // null = platform-managed credential
-  provider       String     // openai | gemini | deepseek
+  ownerUserId    String?    // null = shared by the workspace; set = personal key of one team member (only their agents can use it)
+  provider       String     // openai | anthropic | gemini | deepseek
   label          String     @default("")
   keyEnc         String
   keyLast4       String
