@@ -5,11 +5,11 @@ coverage/
 .env
 .env.*
 !.env.example
-storage/
+/storage/
 *.log
 next-env.d.ts
 tsconfig.tsbuildinfo
-backups/
+/backups/
 src/generated/
 !.env.test
 !.env.example
