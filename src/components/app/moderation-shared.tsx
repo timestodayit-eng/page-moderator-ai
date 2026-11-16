@@ -1,8 +1,8 @@
 "use client";
 import { Badge } from "@/components/ui";
 
-export const HARMFUL = ["ABUSE", "HARASSMENT", "HATE_SPEECH", "SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "PII_EXPOSURE", "HIGH_RISK"];
-export const CATEGORY_LABEL: Record<string, string> = { POSITIVE: "Positive", NEUTRAL: "Neutral", INQUIRY: "Inquiry", SALES_INQUIRY: "Sales inquiry", COMPLAINT: "Complaint", NEGATIVE: "Negative", ABUSE: "Abuse", HARASSMENT: "Harassment", HATE_SPEECH: "Hate speech", SPAM: "Spam", SCAM: "Scam", SUSPICIOUS_LINK: "Suspicious link", REPEATED_PROMO: "Repeated promo", PII_EXPOSURE: "PII exposure", HIGH_RISK: "High risk", UNCERTAIN: "Uncertain" };
+export const HARMFUL = ["DEFAMATION", "ABUSE", "HARASSMENT", "HATE_SPEECH", "SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "PII_EXPOSURE", "HIGH_RISK"];
+export const CATEGORY_LABEL: Record<string, string> = { POSITIVE: "Positive", NEUTRAL: "Neutral", INQUIRY: "Inquiry", SALES_INQUIRY: "Sales inquiry", COMPLAINT: "Complaint", NEGATIVE: "Negative", DEFAMATION: "Defamation / fraud accusation", ABUSE: "Abuse", HARASSMENT: "Harassment", HATE_SPEECH: "Hate speech", SPAM: "Spam", SCAM: "Scam", SUSPICIOUS_LINK: "Suspicious link", REPEATED_PROMO: "Repeated promo", PII_EXPOSURE: "PII exposure", HIGH_RISK: "High risk", UNCERTAIN: "Uncertain" };
 
 export function CategoryBadge({ category }: { category?: string | null }) {
   if (!category) return <Badge>Not analysed</Badge>;

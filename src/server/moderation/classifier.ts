@@ -4,14 +4,19 @@ import { complete, parseJsonObject, type Provider } from "../ai/gateway";
 import { retrieveKnowledge } from "../agents/knowledge";
 
 export const CATEGORIES = [
-  "POSITIVE", "NEUTRAL", "INQUIRY", "SALES_INQUIRY", "COMPLAINT", "NEGATIVE", "ABUSE", "HARASSMENT", "HATE_SPEECH", "SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "PII_EXPOSURE", "HIGH_RISK", "UNCERTAIN",
+  "POSITIVE", "NEUTRAL", "INQUIRY", "SALES_INQUIRY", "COMPLAINT", "NEGATIVE", "DEFAMATION", "ABUSE", "HARASSMENT", "HATE_SPEECH", "SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "PII_EXPOSURE", "HIGH_RISK", "UNCERTAIN",
 ] as const;
 export type Category = (typeof CATEGORIES)[number];
 export type RecommendedAction = "KEEP" | "REPLY" | "REVIEW" | "HIDE";
 
-export const HARMFUL_CATEGORIES: Category[] = ["ABUSE", "HARASSMENT", "HATE_SPEECH", "SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "PII_EXPOSURE", "HIGH_RISK"];
+export const HARMFUL_CATEGORIES: Category[] = ["DEFAMATION", "ABUSE", "HARASSMENT", "HATE_SPEECH", "SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "PII_EXPOSURE", "HIGH_RISK"];
 /** Categories that may NEVER be auto-hidden, regardless of configuration. */
-export const PROTECTED_CATEGORIES: Category[] = ["POSITIVE", "NEUTRAL", "INQUIRY", "SALES_INQUIRY", "COMPLAINT", "NEGATIVE", "UNCERTAIN"];
+export const PROTECTED_CATEGORIES: Category[] = ["POSITIVE", "NEUTRAL", "INQUIRY", "SALES_INQUIRY", "UNCERTAIN"];
+/**
+ * Negative-sentiment categories. By default they are only reviewed; a Page admin can switch on
+ * `hideNegativeSentiment` so the AI may hide them automatically as well (business decision).
+ */
+export const NEGATIVE_CATEGORIES: Category[] = ["COMPLAINT", "NEGATIVE"];
 
 export const POLICY_VERSION = "2026.11-r1";
 
@@ -27,6 +32,8 @@ export const classificationSchema = z.object({
   suggested_reply: z.string().max(1500).nullable().optional(),
   targets_other_commenter: z.boolean().optional().default(false),
   contains_contact_info: z.boolean().optional().default(false),
+  negative_vibe: z.boolean().optional().default(false),
+  slang_detected: z.boolean().optional().default(false),
 });
 export type Classification = z.infer<typeof classificationSchema>;
 
@@ -97,8 +104,9 @@ Categories (choose exactly one):
 - INQUIRY: question about services, process, documents, timing, location, contact.
 - SALES_INQUIRY: wants to buy / apply / asks price, salary, cost, availability.
 - COMPLAINT: a specific, legitimate grievance about the business (delay, money, behaviour, quality). Even if angry or rude in tone, if it is about the business it is COMPLAINT, not ABUSE.
-- NEGATIVE: general dissatisfaction, distrust or criticism without threats or slurs ("ভালো না", "fraud mone hoy", "don't trust them").
-- ABUSE: slurs, obscene insults, severe profanity directed at a person.
+- NEGATIVE: general dissatisfaction, distrust or criticism of the business without accusations of crime or insults ("ভালো না", "service slow", "don't recommend"). Also sarcasm and comments whose only purpose is to create a negative vibe about the Page.
+- DEFAMATION: calls the business or its people cheats, frauds, thieves or criminals, or claims they ruined someone ("বাটপার", "ঠকবাজ", "প্রতারক", "ধান্দাবাজ", "চোর", "এরা মানুষের টাকা মেরে খায়", "পাসপোর্ট দিয়ে জীবনের সর্বনাশ হয়ে গেল", "সব শেষ করে দিল", "fraud company", "dalal"). Includes Bengali/Banglish slang and insinuations, even without profanity. This is NOT a factual complaint with details — a complaint describes a specific problem; defamation attacks the reputation.
+- ABUSE: slurs, obscene insults, severe profanity or vulgar Bengali/Banglish slang directed at the business, its staff or anyone ("তোর মায়েরে…", "শালা", "কুত্তার বাচ্চা", "madarchod", "bokachoda", masked profanity like "b*l", "ch*d").
 - HARASSMENT: repeated or targeted attacks on another commenter/individual, threats, intimidation, doxxing attempts.
 - HATE_SPEECH: attacks on protected groups (religion, ethnicity, gender, nationality, etc.).
 - SPAM: irrelevant promotion, "inbox me", bulk copy-paste marketing, unrelated job/visa offers from third parties.
@@ -110,14 +118,14 @@ Categories (choose exactly one):
 - UNCERTAIN: you genuinely cannot determine meaning (gibberish, ambiguous short text).
 
 Rules:
-1. Negative opinions, criticism and complaints are LEGITIMATE and must NOT be classified as ABUSE/SPAM. Businesses must not hide criticism. Prefer COMPLAINT/NEGATIVE with recommended_action REVIEW or REPLY.
-2. Only recommend HIDE for ABUSE, HARASSMENT, HATE_SPEECH, SPAM, SCAM, SUSPICIOUS_LINK, REPEATED_PROMO, PII_EXPOSURE, HIGH_RISK — and only when confident.
+1. Understand MEANING, tone and slang — never rely on keywords. Bengali and Banglish insults, sarcasm, veiled accusations and "negative vibe" comments must be recognised even when no obvious bad word appears. Distinguish: a specific complaint with facts (COMPLAINT) → a general bad opinion (NEGATIVE) → an accusation of fraud/cheating or ruin without facts (DEFAMATION) → profanity/slurs (ABUSE).
+2. Recommend HIDE for DEFAMATION, ABUSE, HARASSMENT, HATE_SPEECH, SPAM, SCAM, SUSPICIOUS_LINK, REPEATED_PROMO, PII_EXPOSURE, HIGH_RISK when confident. For COMPLAINT and NEGATIVE also recommend HIDE when the comment damages the business's reputation without a resolvable issue; the Page's own policy decides whether such hides run automatically or go to review. Set negative_vibe=true for any comment that lowers the Page's reputation in a reader's eyes.
 3. Recommend REPLY for INQUIRY, SALES_INQUIRY, POSITIVE, and for COMPLAINT when a calm professional response helps. Recommend REVIEW when a human should look (complaints, uncertain, borderline).
 4. confidence = how sure you are about the category. risk_score = potential harm to the community/business if the comment stays visible (0 = none, 1 = severe).
 5. If recommended_action is REPLY and business knowledge is provided, write suggested_reply in the SAME language/script as the comment, warm and professional, 1-3 sentences, never inventing prices, salaries, dates or guarantees. If the needed fact is not in the knowledge, politely direct them to the official contact instead. Otherwise set suggested_reply to null.
 6. Keep reasoning short (one or two sentences, English).
 
-Return ONLY JSON with keys: language, category, sentiment, confidence, risk_score, reasoning, recommended_action, intent, suggested_reply, targets_other_commenter, contains_contact_info.`;
+Return ONLY JSON with keys: language, category, sentiment, confidence, risk_score, reasoning, recommended_action, intent, suggested_reply, targets_other_commenter, contains_contact_info, negative_vibe, slang_detected.`;
 
 export type ClassifyInput = {
   workspaceId: string;
@@ -171,7 +179,7 @@ export async function classifyComment(input: ClassifyInput) {
   const parsed = classificationSchema.safeParse(raw);
   const classification: Classification = parsed.success
     ? parsed.data
-    : { language: "other", category: "UNCERTAIN", sentiment: "neutral", confidence: 0.3, risk_score: 0.2, reasoning: "Model output failed validation; routed to human review.", recommended_action: "REVIEW", intent: "", suggested_reply: null, targets_other_commenter: false, contains_contact_info: false };
+    : { language: "other", category: "UNCERTAIN", sentiment: "neutral", confidence: 0.3, risk_score: 0.2, reasoning: "Model output failed validation; routed to human review.", recommended_action: "REVIEW", intent: "", suggested_reply: null, targets_other_commenter: false, contains_contact_info: false, negative_vibe: false, slang_detected: false };
   return { classification: applyDeterministicRules(classification, s), meta: result, knowledgeUsed: knowledge.length };
 }
 
@@ -197,7 +205,10 @@ export function applyDeterministicRules(c: Classification, s: Signals): Classifi
     out.category = "UNCERTAIN";
     out.recommended_action = "REVIEW";
   }
-  if (PROTECTED_CATEGORIES.includes(out.category) && out.recommended_action === "HIDE") out.recommended_action = out.category === "COMPLAINT" || out.category === "NEGATIVE" ? "REVIEW" : "KEEP";
+  if (PROTECTED_CATEGORIES.includes(out.category) && out.recommended_action === "HIDE") out.recommended_action = "KEEP";
+  // Negative sentiment: the model may recommend HIDE; the policy engine decides whether it executes automatically.
+  if (NEGATIVE_CATEGORIES.includes(out.category) && out.recommended_action === "HIDE" && out.confidence < 0.7) out.recommended_action = "REVIEW";
+  if (out.negative_vibe && (out.category === "NEUTRAL" || out.category === "POSITIVE")) out.category = "NEGATIVE";
   if (out.category === "HIGH_RISK") out.recommended_action = "REVIEW"; // humans decide on high-risk content; may hide via policy only when explicitly enabled
   if (out.recommended_action === "REPLY" && !out.suggested_reply) out.recommended_action = out.category === "COMPLAINT" ? "REVIEW" : "KEEP";
   return out;

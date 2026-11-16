@@ -98,6 +98,10 @@ Set `META_APP_ID`, `META_APP_SECRET`, `META_WEBHOOK_VERIFY_TOKEN` and configure 
 
 Automatic Meta actions stay off until `META_AUTOMATION_ENABLED=true` **and** a Page admin enables them per Page. Step-by-step: docs/META-APP-SETUP.md.
 
+### Negative comments (নেগেটিভ কমেন্ট)
+
+The classifier understands meaning, not keywords: Bengali / Banglish slang, profanity, accusations like "বাটপার", "ঠকবাজ", "পাসপোর্ট দিয়ে জীবনের সর্বনাশ", sarcasm and "negative vibe" comments are recognised as DEFAMATION / ABUSE / NEGATIVE. Spam, scams, defamation, abuse, harassment and hate speech can be auto-hidden once a Page enables automation. Plain complaints and negative opinions go to the review queue by default; a Page admin can turn on **"Also hide negative-sentiment comments"** in the Page's configuration to let the AI hide those automatically as well (same confidence thresholds and hourly caps; every hide is reversible from the queue).
+
 ## 8. AI API integration
 
 Platform-managed keys: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY` (any subset; `DEFAULT_AI_PROVIDER` picks the default). Customers may bring their own keys in Settings → AI providers; keys are verified with a test call, stored with AES-256-GCM, and never fall back to platform credits unless a Super Admin allows it for that workspace. Budgets: per-plan monthly AI allowance (atomic reservation, no overspend under concurrency) and a platform-wide cap in Platform Settings → AI.

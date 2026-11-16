@@ -5,7 +5,7 @@ import { useApi } from "@/lib/hooks";
 import { api, ApiError } from "@/lib/api";
 
 type Settings = Record<string, Record<string, unknown>>;
-const HIDE_CATS = ["SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "ABUSE", "HARASSMENT", "HATE_SPEECH", "PII_EXPOSURE", "HIGH_RISK"];
+const HIDE_CATS = ["SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "DEFAMATION", "ABUSE", "HARASSMENT", "HATE_SPEECH", "PII_EXPOSURE", "HIGH_RISK", "NEGATIVE", "COMPLAINT"];
 
 export default function PlatformSettings() {
   const toast = useToast();

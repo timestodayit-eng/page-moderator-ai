@@ -57,6 +57,7 @@ export function computeMetrics(details: { expected: string; predicted: string; e
     total: details.length,
     perCategory,
     hide: { predicted: hidePred.length, falsePositives: hideFalse.length, falsePositiveRate: hidePred.length ? hideFalse.length / hidePred.length : 0, recall: hideExpected.length ? (hideExpected.length - hideMissed.length) / hideExpected.length : 0 },
-    complaintPreserved: (() => { const c = details.filter((d) => d.expected === "COMPLAINT" || d.expected === "NEGATIVE"); return c.length ? c.filter((d) => d.predictedAction !== "HIDE").length / c.length : 1; })(),
+    // Of the complaints/negative comments reviewers said should NOT be hidden, how many did the model keep?
+    complaintPreserved: (() => { const c = details.filter((d) => (d.expected === "COMPLAINT" || d.expected === "NEGATIVE") && d.expectedDecision !== "HIDE"); return c.length ? c.filter((d) => d.predictedAction !== "HIDE").length / c.length : 1; })(),
   };
 }

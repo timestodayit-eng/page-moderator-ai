@@ -1,30 +1,212 @@
 [
-  { "text": "আপনাদের সার্ভিস সম্পর্কে বিস্তারিত জানতে চাই।", "language": "bn", "category": "INQUIRY", "expectedDecision": "REPLY" },
-  { "text": "ভাই সৌদি আরবে কাজের বেতন কত?", "language": "bn", "category": "SALES_INQUIRY", "expectedDecision": "REPLY" },
-  { "text": "Malaysia te factory job ache? beton koto?", "language": "banglish", "category": "SALES_INQUIRY", "expectedDecision": "REPLY" },
-  { "text": "What documents do I need for the Saudi driver visa?", "language": "en", "category": "INQUIRY", "expectedDecision": "REPLY" },
-  { "text": "অফিস কোথায়? শুক্রবার খোলা থাকে?", "language": "bn", "category": "INQUIRY", "expectedDecision": "REPLY" },
-  { "text": "আপনাদের সার্ভিস নিয়ে আমি সন্তুষ্ট নই।", "language": "bn", "category": "COMPLAINT", "expectedDecision": "REVIEW" },
-  { "text": "৩ মাস আগে টাকা দিয়েছি, এখনো ভিসা পাই নাই। ফোন ধরেন না কেন?", "language": "bn", "category": "COMPLAINT", "expectedDecision": "REVIEW" },
-  { "text": "Taka niye ekhon kono khobor nai. Eta kemon service?", "language": "banglish", "category": "COMPLAINT", "expectedDecision": "REVIEW" },
-  { "text": "Worst agency ever. They delayed my medical twice.", "language": "en", "category": "COMPLAINT", "expectedDecision": "REVIEW" },
-  { "text": "এদের বিশ্বাস করা যায় না, সবাই সাবধান", "language": "bn", "category": "NEGATIVE", "expectedDecision": "REVIEW" },
-  { "text": "fraud mone hoy, keu jaben na", "language": "banglish", "category": "NEGATIVE", "expectedDecision": "REVIEW" },
-  { "text": "Alhamdulillah, apnader maddhome amar bhai Saudi gese. Thank you!", "language": "banglish", "category": "POSITIVE", "expectedDecision": "REPLY" },
-  { "text": "খুব ভালো সার্ভিস, ধন্যবাদ কোস্টাল ম্যানপাওয়ার", "language": "bn", "category": "POSITIVE", "expectedDecision": "REPLY" },
-  { "text": "Great experience, got my visa in 40 days.", "language": "en", "category": "POSITIVE", "expectedDecision": "REPLY" },
-  { "text": "😊👍", "language": "en", "category": "NEUTRAL", "expectedDecision": "KEEP" },
-  { "text": "@Rafiq dekh eta", "language": "banglish", "category": "NEUTRAL", "expectedDecision": "KEEP" },
-  { "text": "100% guaranteed Saudi visa!! inbox me now bit.ly/xyz", "language": "en", "category": "SCAM", "expectedDecision": "HIDE" },
-  { "text": "ভিসা ১০০% গ্যারান্টি, আজই টাকা পাঠান 01XXXXXXXXX ইনবক্স করুন", "language": "bn", "category": "SCAM", "expectedDecision": "HIDE" },
-  { "text": "Europe visa processing cheap rate contact www.fast-visa.xyz", "language": "en", "category": "SPAM", "expectedDecision": "HIDE" },
-  { "text": "Amar page e like den, Dubai job er jonno inbox koren", "language": "banglish", "category": "SPAM", "expectedDecision": "HIDE" },
-  { "text": "Free bitcoin giveaway click here tinyurl.com/abc", "language": "en", "category": "SUSPICIOUS_LINK", "expectedDecision": "HIDE" },
-  { "text": "tui ekta pagol, tor family k dekhe nibo", "language": "banglish", "category": "HARASSMENT", "expectedDecision": "HIDE" },
-  { "text": "এই কমেন্টকারী একটা মিথ্যাবাদী, ওর ছবি সবাই শেয়ার করেন", "language": "bn", "category": "HARASSMENT", "expectedDecision": "HIDE" },
-  { "text": "***** tor baap ***** (obscene insult)", "language": "banglish", "category": "ABUSE", "expectedDecision": "HIDE" },
-  { "text": "All people from that district are thieves and should be banned", "language": "en", "category": "HATE_SPEECH", "expectedDecision": "HIDE" },
-  { "text": "Amar passport number A01234567, NID 1234567890, ekhane dilam check korun", "language": "banglish", "category": "PII_EXPOSURE", "expectedDecision": "HIDE" },
-  { "text": "I will burn this office down tomorrow", "language": "en", "category": "HIGH_RISK", "expectedDecision": "REVIEW" },
-  { "text": "asdkjh qweoiu", "language": "en", "category": "UNCERTAIN", "expectedDecision": "REVIEW" }
+  {
+    "text": "আপনাদের সার্ভিস সম্পর্কে বিস্তারিত জানতে চাই।",
+    "language": "bn",
+    "category": "INQUIRY",
+    "expectedDecision": "REPLY"
+  },
+  {
+    "text": "ভাই সৌদি আরবে কাজের বেতন কত?",
+    "language": "bn",
+    "category": "SALES_INQUIRY",
+    "expectedDecision": "REPLY"
+  },
+  {
+    "text": "Malaysia te factory job ache? beton koto?",
+    "language": "banglish",
+    "category": "SALES_INQUIRY",
+    "expectedDecision": "REPLY"
+  },
+  {
+    "text": "What documents do I need for the Saudi driver visa?",
+    "language": "en",
+    "category": "INQUIRY",
+    "expectedDecision": "REPLY"
+  },
+  {
+    "text": "অফিস কোথায়? শুক্রবার খোলা থাকে?",
+    "language": "bn",
+    "category": "INQUIRY",
+    "expectedDecision": "REPLY"
+  },
+  {
+    "text": "আপনাদের সার্ভিস নিয়ে আমি সন্তুষ্ট নই।",
+    "language": "bn",
+    "category": "COMPLAINT",
+    "expectedDecision": "REVIEW"
+  },
+  {
+    "text": "৩ মাস আগে টাকা দিয়েছি, এখনো ভিসা পাই নাই। ফোন ধরেন না কেন?",
+    "language": "bn",
+    "category": "COMPLAINT",
+    "expectedDecision": "REVIEW"
+  },
+  {
+    "text": "Taka niye ekhon kono khobor nai. Eta kemon service?",
+    "language": "banglish",
+    "category": "COMPLAINT",
+    "expectedDecision": "REVIEW"
+  },
+  {
+    "text": "Worst agency ever. They delayed my medical twice.",
+    "language": "en",
+    "category": "COMPLAINT",
+    "expectedDecision": "REVIEW"
+  },
+  {
+    "text": "এদের বিশ্বাস করা যায় না, সবাই সাবধান",
+    "language": "bn",
+    "category": "NEGATIVE",
+    "expectedDecision": "REVIEW"
+  },
+  {
+    "text": "fraud mone hoy, keu jaben na",
+    "language": "banglish",
+    "category": "NEGATIVE",
+    "expectedDecision": "REVIEW"
+  },
+  {
+    "text": "Alhamdulillah, apnader maddhome amar bhai Saudi gese. Thank you!",
+    "language": "banglish",
+    "category": "POSITIVE",
+    "expectedDecision": "REPLY"
+  },
+  {
+    "text": "খুব ভালো সার্ভিস, ধন্যবাদ কোস্টাল ম্যানপাওয়ার",
+    "language": "bn",
+    "category": "POSITIVE",
+    "expectedDecision": "REPLY"
+  },
+  {
+    "text": "Great experience, got my visa in 40 days.",
+    "language": "en",
+    "category": "POSITIVE",
+    "expectedDecision": "REPLY"
+  },
+  {
+    "text": "😊👍",
+    "language": "en",
+    "category": "NEUTRAL",
+    "expectedDecision": "KEEP"
+  },
+  {
+    "text": "@Rafiq dekh eta",
+    "language": "banglish",
+    "category": "NEUTRAL",
+    "expectedDecision": "KEEP"
+  },
+  {
+    "text": "100% guaranteed Saudi visa!! inbox me now bit.ly/xyz",
+    "language": "en",
+    "category": "SCAM",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "ভিসা ১০০% গ্যারান্টি, আজই টাকা পাঠান 01XXXXXXXXX ইনবক্স করুন",
+    "language": "bn",
+    "category": "SCAM",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "Europe visa processing cheap rate contact www.fast-visa.xyz",
+    "language": "en",
+    "category": "SPAM",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "Amar page e like den, Dubai job er jonno inbox koren",
+    "language": "banglish",
+    "category": "SPAM",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "Free bitcoin giveaway click here tinyurl.com/abc",
+    "language": "en",
+    "category": "SUSPICIOUS_LINK",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "tui ekta pagol, tor family k dekhe nibo",
+    "language": "banglish",
+    "category": "HARASSMENT",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "এই কমেন্টকারী একটা মিথ্যাবাদী, ওর ছবি সবাই শেয়ার করেন",
+    "language": "bn",
+    "category": "HARASSMENT",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "***** tor baap ***** (obscene insult)",
+    "language": "banglish",
+    "category": "ABUSE",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "All people from that district are thieves and should be banned",
+    "language": "en",
+    "category": "HATE_SPEECH",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "Amar passport number A01234567, NID 1234567890, ekhane dilam check korun",
+    "language": "banglish",
+    "category": "PII_EXPOSURE",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "I will burn this office down tomorrow",
+    "language": "en",
+    "category": "HIGH_RISK",
+    "expectedDecision": "REVIEW"
+  },
+  {
+    "text": "asdkjh qweoiu",
+    "language": "en",
+    "category": "UNCERTAIN",
+    "expectedDecision": "REVIEW"
+  },
+  {
+    "text": "এরা বাটপার, মানুষের টাকা মেরে খায়",
+    "language": "bn",
+    "category": "DEFAMATION",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "পাসপোর্ট দিয়ে জীবনের সর্বনাশ হয়ে গেল, সব শেষ",
+    "language": "bn",
+    "category": "DEFAMATION",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "ei company ta ekta thokbaj company, dalal der adda",
+    "language": "banglish",
+    "category": "DEFAMATION",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "Fraud company, they will take your money and disappear",
+    "language": "en",
+    "category": "DEFAMATION",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "শালা ধান্দাবাজ, এদের অফিসে গেলে কুত্তা লেলিয়ে দেয়",
+    "language": "bn",
+    "category": "ABUSE",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "এদের থেকে দূরে থাকেন ভাই, কিছু বললাম না",
+    "language": "bn",
+    "category": "NEGATIVE",
+    "expectedDecision": "HIDE"
+  },
+  {
+    "text": "ha ha ha 'best agency' 🙄 sobai jane",
+    "language": "banglish",
+    "category": "NEGATIVE",
+    "expectedDecision": "HIDE"
+  }
 ]

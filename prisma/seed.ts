@@ -45,7 +45,7 @@ export async function seed() {
     branding: { appName: process.env.APP_NAME ?? "Page Moderator AI", brandColor: "#2563EB" },
     registration: { enabled: true, requireApproval: false, allowedDomains: [] },
     ai: { defaultProvider: process.env.DEFAULT_AI_PROVIDER ?? "openai", monthlyPlatformBudgetMicroUsd: 500_000_000, warnAtPercent: 80 },
-    moderation: { globalMaxAutoHidesPerPagePerHour: 60, minAutoHideConfidence: 0.85, autoHideAllowedCategories: ["SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "ABUSE", "HARASSMENT", "HATE_SPEECH", "HIGH_RISK"] },
+    moderation: { globalMaxAutoHidesPerPagePerHour: 60, minAutoHideConfidence: 0.85, autoHideAllowedCategories: ["SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "DEFAMATION", "ABUSE", "HARASSMENT", "HATE_SPEECH", "PII_EXPOSURE", "HIGH_RISK", "NEGATIVE", "COMPLAINT"] },
     security: { sessionTtlHours: 336, maxFailedLogins: 8, requireEmailVerification: true },
     retention: { commentsDays: 365, messagesDays: 365, auditDays: 730, webhookEventsDays: 30 },
     features: { messenger: true, crm: true, billing: true, byok: true },

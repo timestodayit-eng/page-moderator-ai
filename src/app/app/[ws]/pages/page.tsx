@@ -9,9 +9,10 @@ import { useApi } from "@/lib/hooks";
 import { api, ApiError } from "@/lib/api";
 import { timeAgo } from "@/lib/utils";
 
-type Page = { id: string; fbPageId: string; name: string; category: string | null; pictureUrl: string | null; status: string; grantedScopes: string[]; missingScopes: string[]; webhookSubscribed: boolean; webhookFields: string[]; lastHealthCheckAt: string | null; healthError: string | null; connectedAt: string; moderationMode: "SHADOW" | "APPROVAL" | "AUTO"; autoHideEnabled: boolean; killSwitch: boolean; replyMode: "OFF" | "SUGGEST" | "APPROVAL" | "LIMITED_AUTO"; moderationAgentId: string | null; replyAgentId: string | null; messengerAgentId: string | null; settings: { categories: Record<string, { autoHide: boolean; threshold: number }>; maxAutoHidesPerHour: number; autoReplyCategories: string[]; maxAutoRepliesPerHour: number; replyMinConfidence: number; notifyOnIncidents: boolean }; _count: { comments: number; conversations: number } };
+type Page = { id: string; fbPageId: string; name: string; category: string | null; pictureUrl: string | null; status: string; grantedScopes: string[]; missingScopes: string[]; webhookSubscribed: boolean; webhookFields: string[]; lastHealthCheckAt: string | null; healthError: string | null; connectedAt: string; moderationMode: "SHADOW" | "APPROVAL" | "AUTO"; autoHideEnabled: boolean; killSwitch: boolean; replyMode: "OFF" | "SUGGEST" | "APPROVAL" | "LIMITED_AUTO"; moderationAgentId: string | null; replyAgentId: string | null; messengerAgentId: string | null; settings: { categories: Record<string, { autoHide: boolean; threshold: number }>; maxAutoHidesPerHour: number; hideNegativeSentiment: boolean; autoReplyCategories: string[]; maxAutoRepliesPerHour: number; replyMinConfidence: number; notifyOnIncidents: boolean }; _count: { comments: number; conversations: number } };
 type Agent = { id: string; name: string; purpose: string; status: string };
-const HIDE_CATS = ["SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "ABUSE", "HARASSMENT", "HATE_SPEECH", "PII_EXPOSURE", "HIGH_RISK"];
+const HIDE_CATS = ["SPAM", "SCAM", "SUSPICIOUS_LINK", "REPEATED_PROMO", "DEFAMATION", "ABUSE", "HARASSMENT", "HATE_SPEECH", "PII_EXPOSURE", "HIGH_RISK"];
+const NEG_CATS = ["NEGATIVE", "COMPLAINT"];
 const REPLY_CATS = ["INQUIRY", "SALES_INQUIRY", "POSITIVE", "NEUTRAL", "COMPLAINT"];
 
 function PagesScreenInner() {
@@ -193,7 +194,7 @@ function ConfigDialog({ page, agents, canAutomate, onClose, onSaved }: { page: P
           </div>
           {form.moderationMode === "AUTO" ? (
             <div className="space-y-3 rounded-sm border border-border p-4">
-              <Switch checked={form.autoHideEnabled} onChange={(v) => setForm((f) => ({ ...f, autoHideEnabled: v }))} disabled={!canAutomate} label="Enable automatic hiding on this Page" description="Off by default. Only the categories below, above their thresholds, within hourly caps. Complaints and negative reviews are never auto-hidden." />
+              <Switch checked={form.autoHideEnabled} onChange={(v) => setForm((f) => ({ ...f, autoHideEnabled: v }))} disabled={!canAutomate} label="Enable automatic hiding on this Page" description="Off by default. Only the categories below, above their thresholds, within hourly caps." />
               <div className="grid gap-2 sm:grid-cols-2">
                 {HIDE_CATS.map((k) => (
                   <div key={k} className="flex items-center justify-between gap-2 rounded-xs bg-surface-2 px-3 py-2">
@@ -201,6 +202,10 @@ function ConfigDialog({ page, agents, canAutomate, onClose, onSaved }: { page: P
                     <div className="flex items-center gap-1.5 text-[12px] text-text-2">≥ <Input type="number" min={0.5} max={1} step={0.01} value={cat(k).threshold} onChange={(e) => setCat(k, { threshold: Number(e.target.value) })} className="h-7 w-[72px] px-2 text-[12px]" /></div>
                   </div>
                 ))}
+              </div>
+              <div className="space-y-2 rounded-xs border border-warning/40 bg-warning-soft/40 p-3">
+                <Switch checked={form.settings.hideNegativeSentiment} onChange={(v) => setForm((f) => ({ ...f, settings: { ...f.settings, hideNegativeSentiment: v } }))} disabled={!canAutomate} label="Also hide negative-sentiment comments (নেগেটিভ কমেন্ট)" description="Lets the AI hide complaints, bad reviews and 'negative vibe' comments it judges reputation-damaging — not only abuse/slang. Off = they go to the review queue instead." />
+                {form.settings.hideNegativeSentiment ? <div className="grid gap-2 sm:grid-cols-2">{NEG_CATS.map((k) => <div key={k} className="flex items-center justify-between gap-2 rounded-xs bg-surface px-3 py-2"><Checkbox checked={cat(k).autoHide} onChange={(v) => setCat(k, { autoHide: v })} label={<span className="text-[13px]">{k.replace(/_/g, " ")}</span>} /><div className="flex items-center gap-1.5 text-[12px] text-text-2">≥ <Input type="number" min={0.5} max={1} step={0.01} value={cat(k).threshold} onChange={(e) => setCat(k, { threshold: Number(e.target.value) })} className="h-7 w-[72px] px-2 text-[12px]" /></div></div>)}</div> : null}
               </div>
               <Field label="Max automatic hides per hour" hint="Platform safety cap also applies."><Input type="number" min={1} max={500} value={form.settings.maxAutoHidesPerHour} onChange={(e) => setForm((f) => ({ ...f, settings: { ...f.settings, maxAutoHidesPerHour: Number(e.target.value) } }))} className="w-32" /></Field>
             </div>

@@ -174,6 +174,9 @@ const settingsSchema = z.object({
     .record(z.string(), z.object({ autoHide: z.boolean().default(false), threshold: z.number().min(0.5).max(1).default(0.9) }))
     .default({}),
   maxAutoHidesPerHour: z.number().int().min(1).max(500).default(30),
+  // When true, COMPLAINT / NEGATIVE comments the AI judges reputation-damaging may be hidden automatically
+  // (same thresholds/caps). When false they are only queued for review.
+  hideNegativeSentiment: z.boolean().default(false),
   autoReplyCategories: z.array(z.string()).default(["INQUIRY", "SALES_INQUIRY", "POSITIVE"]),
   maxAutoRepliesPerHour: z.number().int().min(1).max(500).default(30),
   replyMinConfidence: z.number().min(0.5).max(1).default(0.85),

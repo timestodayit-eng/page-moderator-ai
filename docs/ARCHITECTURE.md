@@ -39,10 +39,11 @@ Every tenant-owned table has `workspaceId`. Services receive a `WorkspaceContext
 
 ```
 comment → signals (urls, repeats, author history)
-        → LLM classification (JSON, 16 categories)
-        → deterministic rules (protected categories can never be HIDE, low-confidence → UNCERTAIN, repeats → REPEATED_PROMO)
+        → LLM classification (JSON, 17 categories incl. DEFAMATION; understands Bengali/Banglish slang, sarcasm, negative vibe — no keyword lists)
+        → deterministic rules (inquiries/positive/neutral can never be HIDE, low-confidence → UNCERTAIN/REVIEW, repeats → REPEATED_PROMO)
         → policy: SHADOW | APPROVAL | AUTO
              AUTO requires: autoHideEnabled (explicit) ∧ category enabled ∧ platform allow-list ∧ confidence ≥ max(page, platform) ∧ hourly cap
+             COMPLAINT / NEGATIVE additionally require the Page's `hideNegativeSentiment` switch (off by default → review queue)
         → decision row (always) → outbound action (only if allowed) → audit
 guards at execution time: META_AUTOMATION_ENABLED, workspace active, emergency pause, Page kill switch, token valid
 ```

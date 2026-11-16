@@ -4,15 +4,20 @@ import { computeMetrics } from "@/server/agents/evaluation";
 import { readFileSync } from "node:fs";
 
 const base: Signals = { urls: [], hasUrl: false, hasPhone: false, hasEmail: false, repeatedByAuthor: 0, authorCommentsLastHour: 0, isReply: false, isPageOwnComment: false, length: 20, script: "bengali" };
-const c = (o: Partial<Classification>): Classification => ({ language: "bn", category: "NEUTRAL", sentiment: "neutral", confidence: 0.9, risk_score: 0.1, reasoning: "", recommended_action: "KEEP", intent: "", suggested_reply: null, targets_other_commenter: false, contains_contact_info: false, ...o });
+const c = (o: Partial<Classification>): Classification => ({ language: "bn", category: "NEUTRAL", sentiment: "neutral", confidence: 0.9, risk_score: 0.1, reasoning: "", recommended_action: "KEEP", intent: "", suggested_reply: null, targets_other_commenter: false, contains_contact_info: false, negative_vibe: false, slang_detected: false, ...o });
 
 describe("deterministic safety rules", () => {
-  it("never allows HIDE for protected categories", () => {
-    for (const cat of ["COMPLAINT", "NEGATIVE", "POSITIVE", "INQUIRY", "SALES_INQUIRY", "NEUTRAL", "UNCERTAIN"] as const) {
+  it("never allows HIDE for protected categories; negative sentiment may be HIDE (policy decides execution)", () => {
+    for (const cat of ["POSITIVE", "INQUIRY", "SALES_INQUIRY", "NEUTRAL", "UNCERTAIN"] as const) {
       const out = applyDeterministicRules(c({ category: cat, recommended_action: "HIDE", confidence: 0.99 }), base);
       expect(out.recommended_action, cat).not.toBe("HIDE");
     }
-    expect(applyDeterministicRules(c({ category: "COMPLAINT", recommended_action: "HIDE" }), base).recommended_action).toBe("REVIEW");
+    expect(applyDeterministicRules(c({ category: "COMPLAINT", recommended_action: "HIDE", confidence: 0.9 }), base).recommended_action).toBe("HIDE");
+    expect(applyDeterministicRules(c({ category: "NEGATIVE", recommended_action: "HIDE", confidence: 0.6 }), base).recommended_action).toBe("REVIEW");
+    expect(applyDeterministicRules(c({ category: "DEFAMATION", recommended_action: "HIDE", confidence: 0.9 }), base).recommended_action).toBe("HIDE");
+  });
+  it("negative vibe on a neutral-looking comment becomes NEGATIVE", () => {
+    expect(applyDeterministicRules(c({ category: "NEUTRAL", negative_vibe: true }), base).category).toBe("NEGATIVE");
   });
   it("downgrades low-confidence harmful labels to UNCERTAIN/REVIEW", () => {
     const out = applyDeterministicRules(c({ category: "ABUSE", recommended_action: "HIDE", confidence: 0.5 }), base);

@@ -15,7 +15,7 @@ Legend: ✅ verified by automated tests and/or a running instance in this build 
 | Meta OAuth: state (cookie + DB, single-use, user-bound), Page discovery, selection, encrypted tokens, webhook subscription verification | ✅ (mocked Graph) ⚠️ (real Meta) | `meta-moderation.test.ts` |
 | Disconnect Page (confirmation, credentials removed, actions cancelled, history kept, other Pages untouched) | ✅ | `meta-moderation.test.ts` |
 | AI classification pipeline, deterministic rules, policy engine, modes, thresholds, caps, kill switch, emergency pause | ✅ (mocked model) ⚠️ (model quality) | `meta-moderation.test.ts`, `classifier-rules.test.ts`, live run |
-| Automatic hide off by default; complaints never auto-hidden; explicit activation | ✅ | `meta-moderation.test.ts` |
+| Automatic hide off by default; explicit activation; negative-sentiment hiding is a per-Page opt-in (defamation / slang / negative vibe hidden automatically when on — verified live with Bengali comments) | ✅ | `meta-moderation.test.ts`, live run |
 | Outbound actions: idempotency, atomic claim, retry/backoff, reconciliation, auth-error handling | ✅ | `meta-moderation.test.ts` |
 | Review queue, approve/reject/correct → training examples, unhide = false-positive | ✅ | tests + browser (approved a hide through the UI, Graph mock received `is_hidden=true`) |
 | Agent Studio (versions, activation, playground), Training Center (knowledge text/upload, examples, bulk import), evaluations with metrics | ✅ (mocked model) | `inbox-crm-agents.test.ts` |

@@ -7,7 +7,7 @@ import { recordUsage } from "../billing/usage";
 import { AiError } from "../ai/gateway";
 import { automationAllowed, requestAction } from "../actions/outbound";
 import { parsePageSettings, type PageSettings } from "../meta/pages";
-import { HARMFUL_CATEGORIES, POLICY_VERSION, PROTECTED_CATEGORIES, classifyComment, computeSignals, type Category, type Classification } from "./classifier";
+import { HARMFUL_CATEGORIES, NEGATIVE_CATEGORIES, POLICY_VERSION, PROTECTED_CATEGORIES, classifyComment, computeSignals, type Category, type Classification } from "./classifier";
 import { loadActiveAgent } from "../agents/service";
 import { appLink, queueEmail } from "../email/service";
 
@@ -17,7 +17,7 @@ type GlobalModerationLimits = { globalMaxAutoHidesPerPagePerHour: number; minAut
 
 async function globalLimits(): Promise<GlobalModerationLimits> {
   const row = await prisma.platformSetting.findUnique({ where: { key: "moderation" } });
-  return { globalMaxAutoHidesPerPagePerHour: 60, minAutoHideConfidence: 0.85, autoHideAllowedCategories: HARMFUL_CATEGORIES, ...((row?.value as Partial<GlobalModerationLimits>) ?? {}) };
+  return { globalMaxAutoHidesPerPagePerHour: 60, minAutoHideConfidence: 0.85, autoHideAllowedCategories: [...HARMFUL_CATEGORIES, ...NEGATIVE_CATEGORIES], ...((row?.value as Partial<GlobalModerationLimits>) ?? {}) };
 }
 
 /**
@@ -36,6 +36,9 @@ export async function evaluatePolicy(page: ConnectedPage, settings: PageSettings
     const catCfg = settings.categories[cat];
     if (PROTECTED_CATEGORIES.includes(cat)) {
       reasons.push("protected category — never hidden automatically; sent to review");
+      decision = "REVIEW";
+    } else if (NEGATIVE_CATEGORIES.includes(cat) && !settings.hideNegativeSentiment) {
+      reasons.push(`${cat} — hiding negative sentiment is off for this Page; sent to review`);
       decision = "REVIEW";
     } else {
       // The recommended action is HIDE; whether it executes automatically depends on the layered policy.

@@ -115,14 +115,28 @@ describe("Meta integration & moderation pipeline", () => {
     expect(await prisma.auditLog.count({ where: { workspaceId: ws.id, action: "outbound.hide_comment_succeeded" } })).toBe(1);
   });
 
-  it("legitimate complaints are never auto-hidden, even if the model says HIDE", async () => {
+  it("complaints go to review by default even if the model says HIDE; with hideNegativeSentiment ON they are hidden", async () => {
     mock.aiResponse = () => ({ language: "bn", category: "COMPLAINT", sentiment: "negative", confidence: 0.97, risk_score: 0.3, reasoning: "Customer unhappy with delay", recommended_action: "HIDE", suggested_reply: null });
     await postWebhook(commentEvent("PAGE1_C3", "আপনাদের সার্ভিস নিয়ে আমি সন্তুষ্ট নই, ৩ মাস ধরে ঘুরাচ্ছেন", { id: "U3", name: "Karim" }));
     await drain();
     const c = await prisma.comment.findFirst({ where: { fbCommentId: "PAGE1_C3" }, include: { decisions: true, classifications: true } });
-    expect(c?.classifications[0].recommendedAction).toBe("REVIEW"); // deterministic rules downgraded HIDE
     expect(c?.decisions[0].decision).toBe("REVIEW");
+    expect(c?.decisions[0].reasons.join(" ")).toContain("negative sentiment is off");
     expect(c?.isHidden).toBe(false);
+    // Page admin opts in to hiding negative sentiment (plus defamation/slang)
+    await call(configRoute, { token, workspace: ws.slug, method: "PATCH", params: { id: pageId }, body: { settings: { hideNegativeSentiment: true, categories: { SPAM: { autoHide: true, threshold: 0.9 }, SCAM: { autoHide: true, threshold: 0.9 }, COMPLAINT: { autoHide: true, threshold: 0.9 }, NEGATIVE: { autoHide: true, threshold: 0.9 }, DEFAMATION: { autoHide: true, threshold: 0.9 }, ABUSE: { autoHide: true, threshold: 0.9 } } } } });
+    mock.aiResponse = () => ({ language: "bn", category: "DEFAMATION", sentiment: "negative", confidence: 0.95, risk_score: 0.7, reasoning: "Calls the agency cheats and says passport submission ruined their life, no specific issue", recommended_action: "HIDE", suggested_reply: null, negative_vibe: true, slang_detected: true });
+    await postWebhook(commentEvent("PAGE1_C3b", "এরা বাটপার, পাসপোর্ট দিয়ে জীবনের সর্বনাশ হয়ে গেল", { id: "U3b", name: "Jamal" }));
+    mock.aiResponse = () => ({ language: "bn", category: "NEGATIVE", sentiment: "negative", confidence: 0.93, risk_score: 0.4, reasoning: "Creates a negative impression without a resolvable issue", recommended_action: "HIDE", suggested_reply: null, negative_vibe: true });
+    await postWebhook(commentEvent("PAGE1_C3c", "এদের থেকে দূরে থাকেন ভাই", { id: "U3c", name: "Sumon" }));
+    await drain();
+    for (const id of ["PAGE1_C3b", "PAGE1_C3c"]) {
+      const h = await prisma.comment.findFirst({ where: { fbCommentId: id }, include: { decisions: true } });
+      expect(h?.decisions[0].decision, id).toBe("HIDE");
+      expect(h?.decisions[0].autoExecuted, id).toBe(true);
+      expect(h?.isHidden, id).toBe(true);
+    }
+    await call(configRoute, { token, workspace: ws.slug, method: "PATCH", params: { id: pageId }, body: { settings: { hideNegativeSentiment: false, categories: { SPAM: { autoHide: true, threshold: 0.9 }, SCAM: { autoHide: true, threshold: 0.9 } } } } });
   });
 
   it("low-confidence harmful classifications become UNCERTAIN → review", async () => {
