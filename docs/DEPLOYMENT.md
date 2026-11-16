@@ -77,7 +77,28 @@ crontab -e → 0 3 * * * /opt/page-moderator-ai/docker/backup.sh >> /var/log/pm-
 
 Also back up `.env` (contains `ENCRYPTION_KEY` — without it, stored Page tokens and API keys cannot be decrypted) and the `storage` volume (`docker run --rm -v page-moderator-ai_storage:/s -v $PWD/backups:/b alpine tar czf /b/storage.tgz -C /s .`).
 
-## 8. Resource notes for a 1 vCPU / 4 GB VPS
+## 8. Sharing a VPS with another site (different subdomain)
+
+If ports 80/443 are already used by another app, run in **shared mode**: the bundled Caddy is skipped and the
+server's existing reverse proxy forwards the subdomain to the app.
+
+1. Find what owns 80/443: `sudo ss -tlnp | grep -E ':80 |:443 '` (nginx / apache2 / caddy / a docker container).
+2. In `.env` add:
+   ```
+   COMPOSE_FILE=docker-compose.yml:docker-compose.shared.yml
+   WEB_PORT=3100            # any free local port
+   ```
+3. `./docker/deploy.sh` → app listens on 127.0.0.1:3100 only (not reachable from the internet directly).
+4. Add the subdomain to the existing proxy:
+   - Nginx: copy `docker/nginx-site.conf.example` to `/etc/nginx/sites-available/page-moderator`, edit the
+     server_name, enable it, `nginx -t && systemctl reload nginx`, then `certbot --nginx -d app.yourdomain.com`.
+   - Host Caddy: add the block from `docker/host-Caddyfile.example` and `systemctl reload caddy`.
+   - A hosting panel (CloudPanel, aaPanel, Hostinger panel, Coolify…): create the site as a "reverse proxy" to
+     `http://127.0.0.1:3100` and enable Let's Encrypt there.
+5. Check `https://app.yourdomain.com/api/health`. The app needs `X-Forwarded-Proto: https` from the proxy
+   (included in the examples) — without it logins fail because cookies are marked secure.
+
+## 9. Resource notes for a 1 vCPU / 4 GB VPS
 
 - Memory limits: web 1.2 GB, worker 800 MB, Postgres ~300 MB, Redis 256 MB cap, Caddy ~30 MB
 - `WORKER_CONCURRENCY=2` is a sensible start on 1 vCPU

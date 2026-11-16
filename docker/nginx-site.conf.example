@@ -1,0 +1,23 @@
+# /etc/nginx/sites-available/page-moderator  (shared-VPS mode; WEB_PORT=3100 in .env)
+# After: ln -s /etc/nginx/sites-available/page-moderator /etc/nginx/sites-enabled/ && nginx -t && systemctl reload nginx
+# Then: certbot --nginx -d app.yourdomain.com   (adds the HTTPS server block + redirect automatically)
+server {
+    listen 80;
+    listen [::]:80;
+    server_name app.yourdomain.com;
+
+    client_max_body_size 25m;          # knowledge-document uploads
+
+    location / {
+        proxy_pass http://127.0.0.1:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;   # must be https after certbot — the app sets secure cookies
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 120s;
+        proxy_buffering off;              # Meta webhooks: pass bodies straight through
+    }
+}

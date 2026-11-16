@@ -1,0 +1,8 @@
+# If the server already runs Caddy on the host (or in another container) — add this site block to its Caddyfile.
+app.yourdomain.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3100 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}
