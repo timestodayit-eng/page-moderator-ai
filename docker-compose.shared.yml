@@ -1,12 +1,14 @@
 # Shared-VPS mode: another site already owns ports 80/443 on this server (Nginx, Apache, host Caddy, a panel…).
 # Activate by adding this line to .env:
 #   COMPOSE_FILE=docker-compose.yml:docker-compose.shared.yml
-# Effect: the bundled Caddy container is NOT started; the web app listens on 127.0.0.1:${WEB_PORT:-3100} only,
-# and the server's existing reverse proxy forwards your subdomain to it (see docker/nginx-site.conf.example
+# Effect: the bundled Caddy container is NOT started; the web app listens on ${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3100}
+# only, and the server's existing reverse proxy forwards your subdomain to it (see docker/nginx-site.conf.example
 # and docker/host-Caddyfile.example). HTTPS is terminated by that proxy.
+# If that proxy itself runs in a Docker container, set WEB_BIND to the host's docker0 address (usually 172.17.0.1,
+# check: ip -4 addr show docker0) and point the proxy at <WEB_BIND>:<WEB_PORT> — containers cannot reach 127.0.0.1.
 services:
   caddy:
     profiles: ["standalone"]
   web:
     ports:
-      - "127.0.0.1:${WEB_PORT:-3100}:3000"
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3100}:3000"
